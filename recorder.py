@@ -5,13 +5,13 @@ from multiprocessing import Process
 from threading import Timer
 
 from configurations import BASKET, LOGGER, SNAPSHOT_RATE
-from data_recorder.bitfinex_connector.bitfinex_client import BitfinexClient
+#from data_recorder.bitfinex_connector.bitfinex_client import BitfinexClient
 from data_recorder.coinbase_connector.coinbase_client import CoinbaseClient
 
 
 class Recorder(Process):
 
-    def __init__(self, symbols):
+    def __init__(self, symbol):
         """
         Constructor of Recorder.
 
@@ -19,7 +19,7 @@ class Recorder(Process):
                         Example: symbols = [('BTC-USD, 'tBTCUSD')]
         """
         super(Recorder, self).__init__()
-        self.symbols = symbols
+        self.symbol = symbol
         self.timer_frequency = SNAPSHOT_RATE
         self.workers = dict()
         self.current_time = dt.now()
@@ -35,15 +35,15 @@ class Recorder(Process):
 
         :return: void
         """
-        coinbase, bitfinex = self.symbols
+        coinbase = self.symbol
 
         self.workers[coinbase] = CoinbaseClient(sym=coinbase)
-        self.workers[bitfinex] = BitfinexClient(sym=bitfinex)
+        #self.workers[bitfinex] = BitfinexClient(sym=bitfinex)
 
-        self.workers[coinbase].start(), self.workers[bitfinex].start()
+        self.workers[coinbase].start() #, self.workers[bitfinex].start()
 
         Timer(5.0, self.timer_worker,
-              args=(self.workers[coinbase], self.workers[bitfinex],)).start()
+              args=[self.workers[coinbase]]).start()
 
         tasks = asyncio.gather(*[self.workers[sym].subscribe()
                                  for sym in self.workers.keys()])
@@ -54,7 +54,7 @@ class Recorder(Process):
             loop.run_until_complete(tasks)
             loop.close()
             [self.workers[sym].join() for sym in self.workers.keys()]
-            LOGGER.info(f'Recorder: loop closed for {coinbase} and {bitfinex}.')
+            LOGGER.info(f'Recorder: loop closed for {coinbase}.')
 
         except KeyboardInterrupt as e:
             LOGGER.info(f"Recorder: Caught keyboard interrupt. \n{e}")
@@ -64,11 +64,10 @@ class Recorder(Process):
 
         finally:
             loop.close()
-            LOGGER.info(f'Recorder: Finally done for {coinbase} and {bitfinex}.')
+            LOGGER.info(f'Recorder: Finally done for {coinbase}.')
 
     def timer_worker(self,
-                     coinbaseClient: CoinbaseClient,
-                     bitfinexClient: BitfinexClient) -> None:
+                     coinbaseClient: CoinbaseClient) -> None:
         """
         Thread worker to be invoked every N seconds (e.g., configurations.SNAPSHOT_RATE)
 
@@ -77,11 +76,11 @@ class Recorder(Process):
         :return: void
         """
         Timer(self.timer_frequency, self.timer_worker,
-              args=(coinbaseClient, bitfinexClient,)).start()
+              args=(coinbaseClient,)).start()
         self.current_time = dt.now()
 
-        if coinbaseClient.book.done_warming_up & \
-                bitfinexClient.book.done_warming_up:
+        if coinbaseClient.book.done_warming_up: # & \
+              #  bitfinexClient.book.done_warming_up:
             """
             This is the place to insert a trading model. 
             You'll have to create your own.
@@ -102,21 +101,21 @@ class Recorder(Process):
             # The LOB snapshot is in a tabular format with columns as defined in
             # `render_lob_feature_names()`
             _ = coinbaseClient.book.render_book()
-            _ = bitfinexClient.book.render_book()
-        elif coinbaseClient.book.done_warming_up and not bitfinexClient.book.done_warming_up:
-            LOGGER.info(f'Bitfinex - {bitfinexClient.sym} is warming up')
-            _ = coinbaseClient.book.render_book()
-        elif bitfinexClient.book.done_warming_up and not coinbaseClient.book.done_warming_up:
-            LOGGER.info(f'Coinbase - {coinbaseClient.sym} is warming up')
-            _ = bitfinexClient.book.render_book()
+           # _ = bitfinexClient.book.render_book()
+        #elif coinbaseClient.book.done_warming_up and not bitfinexClient.book.done_warming_up:
+        #    LOGGER.info(f'Bitfinex - {bitfinexClient.sym} is warming up')
+        #    _ = coinbaseClient.book.render_book()
+        #elif bitfinexClient.book.done_warming_up and not coinbaseClient.book.done_warming_up:
+        #    LOGGER.info(f'Coinbase - {coinbaseClient.sym} is warming up')
+        #    _ = bitfinexClient.book.render_book()
         else:
-            LOGGER.info('Both Coinbase and Bitfinex are still warming up...')
+            LOGGER.info(f'{coinbaseClient.book.sym} is {coinbaseClient.book}')
 
 
 def main():
     LOGGER.info(f'Starting recorder with basket = {BASKET}')
-    for coinbase, bitfinex in BASKET:
-        Recorder((coinbase, bitfinex)).start()
+    for coinbase in BASKET:
+        Recorder(coinbase).start()
         LOGGER.info(f'Process started up for {coinbase}')
         time.sleep(9)
 

@@ -22,39 +22,27 @@ def _get_exchange_from_symbol(symbol: str) -> str:
     :param symbol: instrument name or currency pair
     :return: exchange name
     """
-    symbol_inventory = dict({
-        'BTC-USD': 'coinbase',
-        'ETH-USD': 'coinbase',
-        'LTC-USD': 'coinbase',
-        'tBTCUSD': 'bitfinex',
-        'tETHUSD': 'bitfinex',
-        'tLTCUSD': 'bitfinex',
-        'XBTUSD': 'bitmex',
-        'XETUSD': 'bitmex',
-    })
-    return symbol_inventory[symbol]
+    return 'coinbase'
 
 
-def _get_orderbook_from_exchange(exchange: str) -> \
-        Type[Union[CoinbaseOrderBook, BitfinexOrderBook]]:
+def _get_orderbook_from_exchange(exchange: str) -> CoinbaseOrderBook:
     """
     Get order book given an exchange name.
 
     :param exchange: name of exchange ['bitfinex' or 'coinbase']
     :return: order book for 'exchange'
     """
-    return dict(coinbase=CoinbaseOrderBook, bitfinex=BitfinexOrderBook)[exchange]
+    return CoinbaseOrderBook
 
 
-def get_orderbook_from_symbol(symbol: str) -> \
-        Type[Union[CoinbaseOrderBook, BitfinexOrderBook]]:
+def get_orderbook_from_symbol(symbol: str) -> CoinbaseOrderBook:
     """
     Get order book given an instrument name.
 
     :param symbol: instrument name
     :return: order book for 'symbol'
     """
-    return _get_orderbook_from_exchange(exchange=_get_exchange_from_symbol(symbol=symbol))
+    return CoinbaseOrderBook
 
 
 class Simulator(object):
@@ -173,8 +161,7 @@ class Simulator(object):
 
         LOGGER.info('querying {}'.format(instrument_name))
 
-        order_book = get_orderbook_from_symbol(symbol=instrument_name)(
-            sym=instrument_name)
+        order_book = CoinbaseOrderBook(sym=instrument_name)
 
         start_time = dt.now(tz=TIMEZONE)
         LOGGER.info('Starting get_orderbook_snapshot_history() loop with %i ticks for %s'

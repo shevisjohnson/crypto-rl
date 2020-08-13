@@ -9,10 +9,13 @@ LOGGER = logging.getLogger('crypto_rl_log')
 
 # ./recorder.py
 SNAPSHOT_RATE = 1.0  # For example, 0.25 = 4x per second
-BASKET = [('BTC-USD', 'tBTCUSD'),
-          # ('ETH-USD', 'tETHUSD'),
-          # ('LTC-USD', 'tLTCUSD')
-          ]
+BASKET = ['BTC-USD',
+          'ETH-USD',
+          'LINK-USD',
+          'XLM-USD',
+          'ETH-BTC',
+          'LINK-ETH',
+          'XLM-BTC']
 
 # ./data_recorder/connector_components/client.py
 COINBASE_ENDPOINT = 'wss://ws-feed.pro.coinbase.com'
@@ -26,9 +29,9 @@ INCLUDE_ORDERFLOW = True
 
 # ./data_recorder/database/database.py
 BATCH_SIZE = 100000
-RECORD_DATA = False
+RECORD_DATA = True
 MONGO_ENDPOINT = 'localhost'
-ARCTIC_NAME = 'crypto.tickstore'
+ARCTIC_NAME = 'arctic_crypto.tickstore'
 TIMEZONE = tz.utc
 
 # ./data_recorder/database/simulator.py

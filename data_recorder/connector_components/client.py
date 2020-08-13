@@ -43,7 +43,7 @@ class Client(Thread, ABC):
             self.ws = await websockets.connect(self.ws_endpoint)
 
             if self.request is not None:
-                LOGGER.info('Requesting Book: {}'.format(self.request))
+                LOGGER.info('Requesting Book: {} as {}'.format(self.request, self.ws_endpoint))
                 await self.ws.send(self.request)
                 LOGGER.info('BOOK %s: %s subscription request sent.' %
                             (self.exchange.upper(), self.sym))
@@ -59,7 +59,8 @@ class Client(Thread, ABC):
             # Add incoming messages to a queue, which is consumed and processed
             #  in the run() method.
             while True:
-                self.queue.put(json.loads(await self.ws.recv()))
+                message = await self.ws.recv()
+                self.queue.put(json.loads(message))
 
         except websockets.ConnectionClosed as exception:
             LOGGER.warn('%s: subscription exception %s' % (self.exchange, exception))
