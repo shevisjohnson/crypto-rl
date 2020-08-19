@@ -2,18 +2,25 @@ import os
 from datetime import datetime as dt
 from datetime import timedelta
 from typing import Type, Union
+import json
+
 
 import numpy as np
 import pandas as pd
 from dateutil.parser import parse
 
 from configurations import DATA_PATH, LOGGER, SNAPSHOT_RATE_IN_MICROSECONDS, TIMEZONE
-from data_recorder.bitfinex_connector.bitfinex_orderbook import BitfinexOrderBook
+# from data_recorder.bitfinex_connector.bitfinex_orderbook import BitfinexOrderBook
 from data_recorder.coinbase_connector.coinbase_orderbook import CoinbaseOrderBook
 from data_recorder.database.database import Database
 
 DATA_EXPORTS_PATH = DATA_PATH
 
+
+def _default(o):
+    if isinstance(o, pd.Timestamp):
+        return o.isoformat()
+    return str(o)
 
 def _get_exchange_from_symbol(symbol: str) -> str:
     """
@@ -138,9 +145,20 @@ class Simulator(object):
         :return: (pd.DataFrame) snapshots of limit order books using a
                 stationary feature set
         """
+
         self.db.init_db_connection()
 
         tick_history = self.db.get_tick_history(query=query)
+
+        #tick_history.fillna(value={'side': ''}, inplace=True)
+        #tick_history = tick_history.infer_objects()
+
+        tick_history.info()
+
+        #if isinstance(tick_history.index, pd.DatetimeIndex):
+        #    tick_history.index = tick_history.index.strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+
         if tick_history is None:
             LOGGER.warn("Query returned no data: {}".format(query))
             return None
@@ -170,13 +188,15 @@ class Simulator(object):
         # loop through all ticks returned from the Arctic Tick Store query.
         for count, tx in enumerate(tick_history.itertuples()):
 
+            tick = tx._asdict()
+
             # periodically print number of steps completed
             if count % 250000 == 0:
                 elapsed = (dt.now(tz=TIMEZONE) - start_time).seconds
                 LOGGER.info('...completed %i loops in %i seconds' % (count, elapsed))
 
             # convert to dictionary for processing
-            tick = tx._asdict()
+            #tick = tx._asdict()
 
             # filter out bad ticks
             if 'type' not in tick:
@@ -195,7 +215,7 @@ class Simulator(object):
                 continue
 
             # timestamp for incoming tick
-            new_tick_time = parse(tick.get('system_time'))
+            new_tick_time = parse(tick.get('system_time')) #system_time'))
 
             # remove ticks without timestamps (should not exist/happen)
             if new_tick_time is None:

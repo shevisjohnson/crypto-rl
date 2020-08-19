@@ -3,6 +3,8 @@ import argparse
 from agent.dqn import Agent
 from configurations import LOGGER
 
+from copy import deepcopy
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--window_size',
                     default=100,
@@ -106,6 +108,14 @@ def main(kwargs):
     agent = Agent(**kwargs)
     LOGGER.info(f'Agent created. {agent}')
     agent.start()
+
+
+def train(kwargs):
+     dates = ['2020-08-09', '2020-08-09', '2020-08-09']
+     for i, d in enumerate(dates):
+          twargs = deepcopy(kwargs)
+          twargs['fitting_file'] = 'test'
+          agent = Agent(**twargs)
 
 
 if __name__ == '__main__':

@@ -1,13 +1,42 @@
+import tensorflow as tf
 from keras.models import Sequential
-from keras.layers import Dense, Flatten, Conv2D
+from keras.layers import Dense, Flatten, Conv2D, Layer
 from keras.optimizers import Adam
 from rl.agents.dqn import DQNAgent
 from rl.memory import SequentialMemory
 from rl.callbacks import FileLogger, ModelIntervalCheckpoint
+#from keras.callbacks import TensorBoard
 from configurations import LOGGER
+from itertools import filterfalse, permutations
 import os
 import gym
 import gym_trading
+from datetime import datetime
+
+
+class GridMax(Layer):
+    def __init__(self, input_shape, level=0):
+        super(Layer, self).__init__()
+        self.level = level
+        self.n_partitions = n_partitions = 2 ** level
+        
+        base = [0.0]*(input_shape - 1)
+        for i in range(1, n_partitions+1):
+            if (not (i & (i-1) == 0)) and i != 1:
+                continue
+            base += [1.0/i]*i
+            sub_i = 1.0/i
+            while sub_i < 1.0:
+                base.append(1.0-sub_i)
+                sub_i += 1.0/i
+        possible_dists = np.array(list(filterfalse(lambda x: sum(x) != 1.0, permutations(base, input_shape))))
+        possible_dists = np.unique(possible_dists.round(decimals=5), axis=0)
+        self.dist_map = tf.constant(possible_dists, dtype=tf.float64)
+
+    def call(self, inputs):
+        def normap(x):
+            return tf.norm(inputs-x, ord='euclidean')
+        return self.dist_map[tf.math.argmin(input=tf.map_fn(normap, elems=self.dist_map))]
 
 
 class Agent(object):
@@ -37,10 +66,16 @@ class Agent(object):
         """
         # Agent arguments
         # self.env_name = id
+
+        self.cwd = os.path.dirname(os.path.realpath(__file__))
         self.neural_network_type = nn_type
         self.load_weights = load_weights
         self.number_of_training_steps = number_of_training_steps
         self.visualize = visualize
+
+        self.tb_log_dir = os.path.join(self.cwd, 'dqn_weights', 'logs', 'fit', datetime.now().strftime("%Y%m%d-%H%M%S"))
+
+        LOGGER.info(f"TENSORBOARD LOG DIR: {self.tb_log_dir}")
 
         # Create environment
         self.env = gym.make(**kwargs)
@@ -53,7 +88,7 @@ class Agent(object):
         self.memory = SequentialMemory(limit=10000,
                                        window_length=self.memory_frame_stack)
         self.train = self.env.env.training
-        self.cwd = os.path.dirname(os.path.realpath(__file__))
+        
 
         # create the agent
         self.agent = DQNAgent(model=self.model,
@@ -107,6 +142,7 @@ class Agent(object):
         model.add(Flatten())
         model.add(Dense(256, activation='relu'))
         model.add(Dense(self.env.action_space.n, activation='softmax'))
+        #model.add(GridMax(self.env.action_space.n), 0)
         LOGGER.info(model.summary())
         return model
 
@@ -161,6 +197,7 @@ class Agent(object):
             callbacks = [ModelIntervalCheckpoint(checkpoint_weights_filename,
                                                  interval=250000)]
             callbacks += [FileLogger(log_filename, interval=100)]
+            #callbacks += [TensorBoard(log_dir=self.tb_log_dir, histogram_freq=1)]
 
             LOGGER.info('Starting training...')
             self.agent.fit(self.env,

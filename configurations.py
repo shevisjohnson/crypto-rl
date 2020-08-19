@@ -9,12 +9,12 @@ LOGGER = logging.getLogger('crypto_rl_log')
 
 # ./recorder.py
 SNAPSHOT_RATE = 1.0  # For example, 0.25 = 4x per second
-BASKET = ['BTC-USD',
+BASKET = ['LINK-ETH',
+          'BTC-USD',
           'ETH-USD',
           'LINK-USD',
           'XLM-USD',
           'ETH-BTC',
-          'LINK-ETH',
           'XLM-BTC']
 
 # ./data_recorder/connector_components/client.py
@@ -29,7 +29,7 @@ INCLUDE_ORDERFLOW = True
 
 # ./data_recorder/database/database.py
 BATCH_SIZE = 100000
-RECORD_DATA = True
+RECORD_DATA = False
 MONGO_ENDPOINT = 'localhost'
 ARCTIC_NAME = 'arctic_crypto.tickstore'
 TIMEZONE = tz.utc
