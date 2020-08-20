@@ -66,11 +66,44 @@ class Portfolio(object):
         self.currencies = [fiat] + cryptos
         self.trades = deque()
         self.inventory = {c: 0.0 for c in self.currencies}
-        self.fiat_best_bid = {c: 0.0 for c in cryptos}
-        self.fiat_best_bid[fiat] = 1.0 # fiat converts to itself 1:1
+        self.bid_prices = {c: 0.0 for c in cryptos}
+        self.bid_prices[fiat] = 1.0 # fiat converts to itself 1:1
         self.realized_pnl = 0.0
+        self.previous_fiat_value = 0.0
         self.exchange_graph = generate_exchange_graph(self.currencies, self.exchanges)
         self.statistics = TradeStatistics()
+
+    @property
+    def fiat_value(self) -> float:
+        """
+        calculate the total value of portfolio in fiat currency
+
+        :return: (float) portfolio value (e.g. USD)
+        """
+        total = 0.0
+        for c in self.currencies:
+            total += self.bid_prices[c] * self.inventory[c]
+        return total
+
+    @property
+    def allocation(self) -> Dict[str, float]:
+        """
+        The fractional breakdown of currencies by fiat value
+
+        :return: (Dict[str, float]) portfolio allocation - sum(allocation.values()) == 1.0
+        """
+        fiat_value = self.fiat_value
+
+        allocation = {}
+
+        for currency, count in self.inventory.items():
+            allocation[currency] = (count * self.bid_prices[currency]) / fiat_value
+        
+        return allocation
+
+    @property
+    def total_trade_count(self):
+        return self.trades.__len__()
 
     def __str__(self):
         msg = f'Portfolio: [allocation={self.allocation} | realized_pnl={self.realized_pnl}'
@@ -88,69 +121,49 @@ class Portfolio(object):
         self.trades.clear()
         self.statistics.reset()
         self.currency_counter = {c: 0.0 for c in self.currencies}
-        self.fiat_best_bid = {c: 0.0 for c in self.cryptos}
-        self.fiat_best_bid[fiat]
+        self.bid_prices = {c: 0.0 for c in self.cryptos}
+        self.bid_prices[self.fiat] = 1.0
 
-    @property
-    def fiat_value(self) -> float:
-        """
-        calculate the total value of portfolio in fiat currency
+    def _validate_inventory(self, inventory: Dict[str, float]) -> None:
+        invalid_inventory_items = [k not in self.currencies for k in inventory]
+        if any(invalid_inventory_items):
+            raise ValueError("inventory contains unknown currency: " + \
+                             f"{list(inventory.keys())[invalid_inventory_items.index(True)]}")
 
-        :return: (float) portfolio value (e.g. USD)
-        """
-        total = 0.0
-        for c in self.currencies:
-            total += self.fiat_best_bid[c] * self.inventory[c]
-        return total
+    def _validate_bid_prices(self, bid_prices: Dict[str, float]) -> None:
+        invalid_bid_prices = [k not in self.currencies for k in bid_prices]
+        missing_bid_prices = [k not in bid_prices for k in self.currencies]
+        if any(invalid_bid_prices):
+            raise ValueError("bid_prices contains unknown currency: " + \
+                             f"{list(bid_prices.keys())[invalid_bid_prices.index(True)]}")
+        if any(missing_bid_prices):
+            raise ValueError("Missing bid price for currency: " + \
+                             f"{list(self.currencies.keys())[missing_bid_prices.index(True)]}")
 
-    @property
-    def allocation(self) -> Dict[str, float]:
-        """
-        The fractional breakdown of currencies by fiat value
 
-        :return: (Dict[str, float]) portfolio allocation - sum(allocation.values()) == 1.0
-        """
-        fiat_value = self.fiat_value
+    def initialize(self, inventory: Dict[str, float], bid_prices: Dict[str, float]) -> None:
+        self._validate_inventory(inventory)
+        self._validate_bid_prices(bid_prices)
+        self.inventory.update(inventory)
+        self.bid_prices.update(bid_prices)
+        self.bid_prices[self.fiat] = 1.0
+        self.previous_fiat_value = self.fiat_value
 
-        allocation = {}
-
-        for currency, count in self.inventory.items():
-            allocation[currency] = (count * self.fiat_best_bid[currency]) / fiat_value
-        
-        return allocation
-
-    @property
-    def total_trade_count(self):
-        return self.trades.__len__()
-        
-    def _update_fiat_best_bid(self, exchange: str, latest_bid_price: float) -> None:
-        """
-        Update the best bid price for an exchange between fiat and a crypto
-
-        :return: (void)
-        """
-        if exchange not in self.exchanges:
-            raise ValueError(f"Invalid exchange not in portfolio: {exchange}")
-
-        edge_ends = exchange.split('-')
-
-        if self.fiat not in edge_ends:
-            raise ValueError(f"Invalid non-fiat exchange {exchange}. Exchange must include {self.fiat}.")
-        
-        idx = int(not bool(edge_ends.index(self.fiat)))
-        self.fiat_best_bid[edge_ends[idx]] = latest_bid_price
-
-    def step(self, fiat_bid_prices: Dict[str, float]) -> None:
+    def step(self, bid_prices: Dict[str, float]) -> None:
         """
         Step in environment and update portfolio value.
 
-        :param fiat_bid_prices: dictionary of the best bid price on each fiat exchange
+        :param bid_prices: dictionary of the best bid price on each fiat exchange
         :return: (void)
         """
-        for exchange, bid in fiat_bid_prices.items():
-            self._update_fiat_best_bid(exchange, bid)
+        self._validate_bid_prices(bid_prices)
+        self.bid_prices.update(bid_prices)
+        self.bid_prices[self.fiat] = 1.0
 
-    def _add_market_order(self, order: MarketOrder) -> bool:
+        self.realized_pnl += (self.fiat_value / self.previous_fiat_value) - 1
+        self.previous_fiat_value = self.fiat_value
+
+    def add_order(self, order: MarketOrder) -> bool:
         """
         Add a MARKET order.
 
@@ -162,16 +175,15 @@ class Portfolio(object):
             LOGGER.debug(f"Invalid order on unknown exchange: {order.ccy}")
             return False
 
-        syms = order.ccy.split('-')
+        asset, base = order.ccy.split('-')
 
-        asset = sym[0]
-        base = syms[1] # the currency-unit of order.price
+        buying_asset = bool(['short', 'long'].index(order.side))
 
-        buy_sym = syms[['long', 'short'].index(order.side)]
-        buy_price = order.price if buy_sym == base else 1.0 / order.price
+        buy_sym = [asset, base][not int(buying_asset)]
+        buy_price = order.price if not buying_asset else 1.0 / order.price
 
-        sell_sym = syms[['short', 'long'].index(order.side)]
-        sell_price = order.price if sell_sym == base else 1.0 / order.price
+        sell_sym = [asset, base][int(buying_asset)]
+        sell_price = order.price if buying_asset else 1.0 / order.price
 
         if self.inventory[sell_sym] < (sell_price * order.size):
             LOGGER.debug(f"Invalid order, too large. [ccy={order.ccy}, cost={sell_price * order.size}, available={self.inventory[selling]}]")
