@@ -1,56 +1,16 @@
 # portfolio.py
 #
-#   Inventory and risk management module for a collection of positions
+#   Inventory and risk management module for a collection of currencies
 #
 #
 from collections import deque
-from typing import List
+from typing import List, Dict
 import numpy as np
 
 from configurations import LOGGER, SLIPPAGE, MARKET_ORDER_FEE
 from gym_trading.utils.order import MarketOrder
 from gym_trading.utils.statistic import TradeStatistics
 
-def generate_exchange_graph(currencies: List[str],
-                            exchanges: List[str]) -> Dict[str, Dict[str, str]]:
-    """
-    Creates an undirected graph from list of currencies and exchanges. 
-    Currencies and exchanges are represented as vertices and edges respectively.
-
-    The graph is represented as nested dicts. Each key of each dict is a vertex,
-    each leaf node is the exhange symbol for the vertices leading to that leaf.
-
-    example:
-    currencies = ['USD', 'ETH', 'BTC']
-    exchanges = ['BTC-USD', 'ETH-USD', 'ETH-BTC']
-     
-    graph = {
-        'USD': {
-            'BTC': 'BTC-USD',
-            'ETH': 'ETH-USD',
-        }
-        'BTC': {
-            'USD': 'BTC-USD',
-            'ETH': 'ETH-BTC',
-        }
-        'ETH': {
-            'BTC': 'ETH-BTC',
-            'USD': 'ETH-USD',
-        }
-    }
-
-    :return: (Dict[str, Dict[str, str]]) currency exchange graph
-    """
-    graph = {}
-    for vertex in currencies:
-        edges = {}
-        for edge in exchanges:
-            edge_ends = edge.split('-')
-            if vertex in edge_ends:
-                idx = int(not bool(edge_ends.index(vertex)))
-                edges[edge_ends[idx]] = edge
-        graph[vertex] = edges
-    return graph
 
 class Portfolio(object):
     def __init__(self, 
@@ -65,25 +25,59 @@ class Portfolio(object):
         self.exchanges = exchanges
         self.currencies = [fiat] + cryptos
         self.trades = deque()
-        self.inventory = {c: 0.0 for c in self.currencies}
-        self.bid_prices = {c: 0.0 for c in cryptos}
-        self.bid_prices[fiat] = 1.0 # fiat converts to itself 1:1
-        self.pnl = 0.0
-        self.previous_fiat_value = 0.0
-        self.exchange_graph = generate_exchange_graph(self.currencies, self.exchanges)
+        self.exchange_graph = self.generate_exchange_graph()
         self.statistics = TradeStatistics()
+        self.reset()
 
-    @property
-    def fiat_value(self) -> float:
+    def reset(self) -> None:
         """
-        calculate the total value of portfolio in fiat currency
+        Reset portfolio metrics / inventories.
+
+        :return: (void)
+        """
+        self.pnl = 0.0
+        self.realized_pnl = 0.0
+        self.previous_total_value = 0.0
+        self.previous_realized_value = 0.0
+        self.trades.clear()
+        self.statistics.reset()
+        self.inventory = {c: 0.0 for c in self.currencies}
+        self.bid_prices = {c: 0.0 for c in self.cryptos}
+        self.bid_prices[self.fiat] = 1.0
+
+    def __str__(self):
+        msg = f'Portfolio: [allocation={self.allocation} | pnl={self.pnl}'
+        msg += f' | total_value={self.total_value}'
+        msg += f' | total_trade_count={self.total_trade_count}]'
+        return msg
+        
+    @property
+    def unrealized_value(self) -> float:
+        """
+        calculates the unrealized value of portfolio in fiat currency
 
         :return: (float) portfolio value (e.g. USD)
         """
-        total = 0.0
-        for c in self.currencies:
-            total += self.bid_prices[c] * self.inventory[c]
-        return total
+        return sum([
+            self.bid_prices[c] * self.inventory[c] 
+            for c in self.cryptos
+        ])
+
+    @property
+    def realized_value(self) -> float:
+        """
+        :return: (float) value of fiat holdings in portfolio
+        """
+        return self.inventory[self.fiat]
+
+    @property
+    def total_value(self) -> float:
+        """
+        calculates the total value of portfolio in fiat currency
+
+        :return: (float) portfolio value (e.g. USD)
+        """
+        return self.realized_value + self.unrealized_value
 
     @property
     def allocation(self) -> Dict[str, float]:
@@ -92,37 +86,16 @@ class Portfolio(object):
 
         :return: (Dict[str, float]) portfolio allocation - sum(allocation.values()) == 1.0
         """
-        fiat_value = self.fiat_value
-
-        allocation = {}
-
-        for currency, count in self.inventory.items():
-            allocation[currency] = (count * self.bid_prices[currency]) / fiat_value
-        
-        return allocation
+        if self.total_value <= 0.0:
+            return {c: 0.0 for c in self.currencies}
+        return {
+            currency: (count * self.bid_prices[currency]) / self.total_value
+            for currency, count in self.inventory.items()
+        }
 
     @property
-    def total_trade_count(self):
+    def total_trade_count(self) -> int:
         return self.trades.__len__()
-
-    def __str__(self):
-        msg = f'Portfolio: [allocation={self.allocation} | pnl={self.pnl}'
-        msg += f' | fiat_value={self.fiat_value}'
-        msg += f' | total_trade_count={self.total_trade_count}]'
-        return msg
-
-    def reset(self) -> None:
-        """
-        Reset broker metrics / inventories.
-
-        :return: (void)
-        """
-        self.pnl = 0.0
-        self.trades.clear()
-        self.statistics.reset()
-        self.currency_counter = {c: 0.0 for c in self.currencies}
-        self.bid_prices = {c: 0.0 for c in self.cryptos}
-        self.bid_prices[self.fiat] = 1.0
 
     def _validate_inventory(self, inventory: Dict[str, float]) -> None:
         invalid_inventory_items = [k not in self.currencies for k in inventory]
@@ -142,12 +115,60 @@ class Portfolio(object):
 
 
     def initialize(self, inventory: Dict[str, float], bid_prices: Dict[str, float]) -> None:
+        """
+        Adds starting values to the portfolio.
+
+        :param inventory: (Dict[str, float]) maps currenies to starting amount
+        :param bid_prices: (Dict[str, float]) the most recent bid prices for each
+            crypto-fiat exchange. Keys are the crypto symbol, bid_prices[fiat] == 1.0
+        """
         self._validate_inventory(inventory)
         self._validate_bid_prices(bid_prices)
         self.inventory.update(inventory)
         self.bid_prices.update(bid_prices)
         self.bid_prices[self.fiat] = 1.0
-        self.previous_fiat_value = self.fiat_value
+        self.previous_total_value = self.total_value
+        self.previous_realized_value = 0.0
+
+    def generate_exchange_graph(self) -> Dict[str, Dict[str, str]]:
+        """
+        Creates an undirected graph from list of currencies and exchanges. 
+        Currencies and exchanges are represented as vertices and edges respectively.
+
+        The graph is represented as nested dicts. Each key of each dict is a vertex,
+        each leaf node is the exhange symbol for the vertices leading to that leaf.
+
+        example:
+        self.currencies = ['USD', 'ETH', 'BTC']
+        self.exchanges = ['BTC-USD', 'ETH-USD', 'ETH-BTC']
+        
+        graph = {
+            'USD': {
+                'BTC': 'BTC-USD',
+                'ETH': 'ETH-USD',
+            }
+            'BTC': {
+                'USD': 'BTC-USD',
+                'ETH': 'ETH-BTC',
+            }
+            'ETH': {
+                'BTC': 'ETH-BTC',
+                'USD': 'ETH-USD',
+            }
+        }
+
+        :return: (Dict[str, Dict[str, str]]) currency exchange graph
+        """
+        graph = {}
+        for vertex in self.currencies:
+            edges = {}
+            for edge in self.exchanges:
+                edge_ends = edge.split('-')
+                if vertex in edge_ends:
+                    idx = int(not bool(edge_ends.index(vertex)))
+                    edges[edge_ends[idx]] = edge
+            graph[vertex] = edges
+        return graph
 
     def step(self, bid_prices: Dict[str, float]) -> None:
         """
@@ -160,8 +181,11 @@ class Portfolio(object):
         self.bid_prices.update(bid_prices)
         self.bid_prices[self.fiat] = 1.0
 
-        self.pnl += (self.fiat_value / self.previous_fiat_value) - 1
-        self.previous_fiat_value = self.fiat_value
+        self.pnl += (self.total_value / self.previous_total_value) - 1
+        self.previous_total_value = self.total_value
+
+        self.realized_pnl += (self.realized_value / self.previous_realized_value) - 1
+        self.previous_realized_value = self.realized_value
 
     def add_order(self, order: MarketOrder) -> bool:
         """
@@ -179,27 +203,34 @@ class Portfolio(object):
 
         buying_asset = bool(['short', 'long'].index(order.side))
 
-        buy_sym = [asset, base][not int(buying_asset)]
-        buy_price = order.price if not buying_asset else 1.0 / order.price
+        # Create a hypothetical average execution price incorporating a fixed slippage
+        if buying_asset:
+            order.average_execution_price = order.price * (1.0 + SLIPPAGE)
+        else:
+            order.average_execution_price = order.price * (1.0 - SLIPPAGE)
 
-        sell_sym = [asset, base][int(buying_asset)]
-        sell_price = order.price if buying_asset else 1.0 / order.price
+        # Determine impact of order on inventory
+        long_sym = [asset, base][not int(buying_asset)]
+        long_price = order.average_execution_price \
+                     if not buying_asset \
+                     else 1.0 / order.average_execution_price
+        long_amount = order.size * long_price
+        if self.transaction_fee:
+             long_amount *= 1.0 - MARKET_ORDER_FEE
 
-        if self.inventory[sell_sym] < (sell_price * order.size):
-            LOGGER.debug(f"Invalid order, too large. [ccy={order.ccy}, cost={sell_price * order.size}, available={self.inventory[selling]}]")
+        short_sym = [asset, base][int(buying_asset)]
+        short_price = order.average_execution_price \
+                      if buying_asset \
+                      else 1.0 / order.average_execution_price
+        short_amount = order.size * short_price
+
+        if self.inventory[short_sym] < short_amount:
+            LOGGER.debug(f"Invalid order, too large. [ccy={order.ccy}, cost={short_amount}, available={self.inventory[short_sym]}]")
             return False
 
-        # Create a hypothetical average execution price incorporating a fixed slippage
-        #average_buy_price = buy_price * (1.0 + SLIPPAGE)
-        #average_sell_price = sell_price * (1.0 - SLIPPAGE)
-        order.average_execution_price = order.price
-
         # Update portfolio inventory attributes
-        buy_amount = order.size * buy_price
-        if self.transaction_fee:
-             buy_amount *= 1.0 - MARKET_ORDER_FEE
-        self.inventory[buy_sym] += buy_amount
-        self.inventory[sell_sym] -= order.size * sell_price
+        self.inventory[long_sym] += long_amount
+        self.inventory[short_sym] -= short_amount
 
         # execute and save the market order
         order.executed = order.size
