@@ -57,7 +57,7 @@ class Portfolio(object):
                  fiat: str = 'USD',
                  cryptos: List[str] = ['ETH', 'BTC'],
                  exchanges: List[str] = ['BTC-USD', 'ETH-USD', 'ETH-BTC'],
-                 transaction_fee: bool = False):
+                 transaction_fee: bool = True):
 
         self.transaction_fee = transaction_fee
         self.fiat = fiat
@@ -68,7 +68,7 @@ class Portfolio(object):
         self.inventory = {c: 0.0 for c in self.currencies}
         self.bid_prices = {c: 0.0 for c in cryptos}
         self.bid_prices[fiat] = 1.0 # fiat converts to itself 1:1
-        self.realized_pnl = 0.0
+        self.pnl = 0.0
         self.previous_fiat_value = 0.0
         self.exchange_graph = generate_exchange_graph(self.currencies, self.exchanges)
         self.statistics = TradeStatistics()
@@ -106,7 +106,7 @@ class Portfolio(object):
         return self.trades.__len__()
 
     def __str__(self):
-        msg = f'Portfolio: [allocation={self.allocation} | realized_pnl={self.realized_pnl}'
+        msg = f'Portfolio: [allocation={self.allocation} | pnl={self.pnl}'
         msg += f' | fiat_value={self.fiat_value}'
         msg += f' | total_trade_count={self.total_trade_count}]'
         return msg
@@ -117,7 +117,7 @@ class Portfolio(object):
 
         :return: (void)
         """
-        self.realized_pnl = 0.0
+        self.pnl = 0.0
         self.trades.clear()
         self.statistics.reset()
         self.currency_counter = {c: 0.0 for c in self.currencies}
@@ -160,7 +160,7 @@ class Portfolio(object):
         self.bid_prices.update(bid_prices)
         self.bid_prices[self.fiat] = 1.0
 
-        self.realized_pnl += (self.fiat_value / self.previous_fiat_value) - 1
+        self.pnl += (self.fiat_value / self.previous_fiat_value) - 1
         self.previous_fiat_value = self.fiat_value
 
     def add_order(self, order: MarketOrder) -> bool:
@@ -192,14 +192,18 @@ class Portfolio(object):
         # Create a hypothetical average execution price incorporating a fixed slippage
         #average_buy_price = buy_price * (1.0 + SLIPPAGE)
         #average_sell_price = sell_price * (1.0 - SLIPPAGE)
-
         order.average_execution_price = order.price
-        order.executed = order.size
 
         # Update portfolio inventory attributes
-        self.trades.append(order)  # execute and save the market order
-        self.inventory[buy_sym] += (order.size * buy_price) * (1.0 - MARKET_ORDER_FEE)
+        buy_amount = order.size * buy_price
+        if self.transaction_fee:
+             buy_amount *= 1.0 - MARKET_ORDER_FEE
+        self.inventory[buy_sym] += buy_amount
         self.inventory[sell_sym] -= order.size * sell_price
+
+        # execute and save the market order
+        order.executed = order.size
+        self.trades.append(order) 
 
         # update statistics
         self.statistics.market_orders += 1
