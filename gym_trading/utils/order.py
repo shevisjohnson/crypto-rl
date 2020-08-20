@@ -97,13 +97,14 @@ class Order(ABC):
 
 
 class MarketOrder(Order):
-    def __init__(self, ccy='BTC-USD', side='long', price=0.0, step=-1):
+    def __init__(self, ccy='BTC-USD', side='long', price=0.0, step=-1, size: float = Order.DEFAULT_SIZE):
         super(MarketOrder, self).__init__(price=price,
                                           step=step,
                                           average_execution_price=-1,
                                           order_type='market',
                                           ccy=ccy,
-                                          side=side)
+                                          side=side,
+                                          size=size)
 
     def __str__(self):
         return "[MarketOrder] " + super(MarketOrder, self).__str__()
