@@ -152,15 +152,20 @@ def trade_completion(step_pnl: float, market_order_fee: float,
 
     return reward
 
-def distance_from_optimal_position(position: np.ndarray, optimal_position: np.ndarray) -> np.float64:
+def distance_from_optimal_portfolio(portfolio: np.ndarray, optimal_portfolio: np.ndarray) -> np.float64:
     """
-    Calculate the euclidean distance between the current and optimal positions for 
+    Calculate the euclidean distance between the current and optimal portfolios for 
     a given timestep. Return value is scaled to between -1 and 1 (closer = higher)
 
-    :param position: current percentage breakdown of value across currencies in portfolio 
-                     sum(position) == 1.0
-    :param optimal_position: the position which would have resulted in the highest return for the current timestep
+    The optimal portfolio is the portfolio which would have resulted in the maximum 
+    realized pnl for a given timestep. This includes the transaction fees incurred when
+    moving from the portfolio held at the previous timestep.
+
+    :param portfolio: current fractional breakdown of value across currencies in portfolio 
+        assert(sum(position) == 1.0) | e.g. [0.3, 0.2, 0.0, 0.1, 0.4]
+    :param optimal_portfolio: the portfolio which would have resulted in the highest 
+        realized pnl for the current timestep.
     :return: reward - element of (-1.0, 1.0)
     """
     r2 = np.sqrt(2)
-    return 2 * ((r2 - np.linalg.norm(position-optimal_position) / r2) - 0.5)
+    return 2 * ((r2 - np.linalg.norm(portfolio-optimal_portfolio) / r2) - 0.5)

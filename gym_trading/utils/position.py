@@ -202,6 +202,7 @@ class Position(object):
         self.total_trade_count += 1
 
         # deduct transaction fees whenever an order gets filled
+        # why deduct from total realized pnl? shouldn't this be based on the order size / total exporsure?
         if self.transaction_fee:
             self.realized_pnl -= MARKET_ORDER_FEE
 

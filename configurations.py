@@ -38,9 +38,36 @@ TIMEZONE = tz.utc
 SNAPSHOT_RATE_IN_MICROSECONDS = 1000000  # 1 second
 
 # ./gym_trading/utils/broker.py
-MARKET_ORDER_FEE = 0.0020
+MARKET_ORDER_FEE = 0.005 # Taker fee 0.05% (https://pro.coinbase.com/orders/fees)
 LIMIT_ORDER_FEE = 0.0
 SLIPPAGE = 0.0005
+
+# ./gym_trading/utils/meta_broker.py
+FIAT = 'USD'
+CRYPTOS = [
+    'BTC',
+    'ETH',
+    'XLM',
+    'LINK',
+]
+EXCHANGES = [
+    # fiat exchanges
+    'BTC-USD',
+    'ETH-USD',
+    'LINK-USD',
+    'XLM-USD',
+    # crypto exchanges
+    'ETH-BTC',
+    'XLM-BTC',
+    'LINK-ETH',
+]
+INITIAL_ALLOCATION = {
+    'USD': 1.0,
+    'BTC': 0.0,
+    'ETH': 0.0,
+    'XLM': 0.0,
+    'LINK': 0.0,
+}
 
 # ./indicators/*
 INDICATOR_WINDOW = [60 * i for i in [5, 15]]  # Convert minutes to seconds

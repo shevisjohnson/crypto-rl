@@ -27,11 +27,11 @@ class OrderMetrics(object):
 class Order(ABC):
     DEFAULT_SIZE = 1000.
     _id = 0
-    LIMIT_ORDER_FEE = LIMIT_ORDER_FEE * 2
-    MARKET_ORDER_FEE = MARKET_ORDER_FEE * 2
+    LIMIT_ORDER_FEE = LIMIT_ORDER_FEE
+    MARKET_ORDER_FEE = MARKET_ORDER_FEE
 
     def __init__(self, price: float, step: int, average_execution_price: float,
-                 order_type='limit', ccy='BTC-USD', side='long', ):
+                 order_type='limit', ccy='BTC-USD', side='long', size: float = DEFAULT_SIZE):
         """
 
         :param price:
@@ -45,6 +45,7 @@ class Order(ABC):
         self.ccy = ccy
         self.side = side
         self.price = price
+        self.size = size
         self.step = step
         self.average_execution_price = average_execution_price
         self.metrics = OrderMetrics()
@@ -66,7 +67,7 @@ class Order(ABC):
 
         :return: (bool) TRUE if the order is completely filled
         """
-        return self.executed >= Order.DEFAULT_SIZE
+        return self.executed >= self.size
 
     def update_metrics(self, price: float, step: int) -> None:
         """
