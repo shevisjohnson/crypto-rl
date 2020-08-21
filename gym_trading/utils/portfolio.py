@@ -35,7 +35,6 @@ class Portfolio(object):
         self.exchanges = exchanges
         self.currencies = [fiat] + cryptos
         self.trades = deque()
-        self.exchange_graph = self.generate_exchange_graph()
         self.statistics = TradeStatistics()
         self.reset()
         if initial_inventory:

@@ -2,9 +2,10 @@ from gym_trading.utils.broker import Broker
 from gym_trading.utils.data_pipeline import DataPipeline
 from gym_trading.utils.order import LimitOrder, MarketOrder
 from gym_trading.utils.plot_history import Visualize
-from gym_trading.utils.portfolio import Portfolio
+from gym_trading.utils.meta_broker import MetaBroker
 from gym_trading.utils.reward import (
     asymmetrical, default, default_with_fills,
-    differential_sharpe_ratio, realized_pnl, trade_completion,
+    differential_sharpe_ratio, realized_pnl, 
+    trade_completion, distance_from_optimal_allocation
 )
 from gym_trading.utils.statistic import ExperimentStatistics, TradeStatistics

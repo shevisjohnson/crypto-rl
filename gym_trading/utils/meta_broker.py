@@ -11,6 +11,8 @@ from typing import List, Dict, Optional
 from operator import itemgetter
 
 from gym_trading.utils.portfolio import Portfolio
+from gym_trading.utils.order import MarketOrder
+from gym_trading.utils.exchange_graph import generate_exchange_graph
 from configurations import LOGGER
 
 class MetaBroker(object):
@@ -39,6 +41,7 @@ class MetaBroker(object):
                                    transaction_fee=transaction_fee,
                                    initial_inventory=initial_inventory,
                                    initial_bid_prices=initial_bid_prices)
+        self.exchange_graph = generate_exchange_graph(self.portfolio.currencies)
 
     def reset(self) -> None:
         """
@@ -46,16 +49,26 @@ class MetaBroker(object):
 
         :return: (void)
         """
+        self.exchange_graph = generate_exchange_graph(self.portfolio.currencies)
         self.portfolio.reset()
 
-    def initialize(self, bid_prices: Dict[str, float], inventory: Dict[str, float] = {}) -> None:
+    def initialize(self, 
+                   bid_ask_prices: Dict[str, Dict[str, float]], 
+                   inventory: Dict[str, float] = {}) -> None:
         """
-        Adds starting values to the portfolio.
+        Adds starting values to the portfolio and exchagne graph.
 
+        :param bid_ask_prices: (Dict[str, Dict[str, float]]) the most recent bid/ask prices for each
+            exchange. Keys are the exchange symbol
         :param inventory: (Dict[str, float]) maps currenies to starting amount
-        :param bid_prices: (Dict[str, float]) the most recent bid prices for each
-            crypto-fiat exchange. Keys are the crypto symbol, bid_prices[fiat] == 1.0
+        :return: (void)
         """
+        self._validate_bid_ask_prices(bid_ask_prices)
+        self._update_exchange_graph(bid_ask_prices)
+        bid_prices = {}
+        for c in self.portfolio.cryptos:
+            bid_prices[c] = self.exchange_graph[c][self.portfolio.fiat]['bid']
+        bid_prices[self.portfolio.fiat] = 1.0
         self.portfolio.initialize(bid_prices, inventory)
 
     @property
@@ -66,14 +79,38 @@ class MetaBroker(object):
         :return: (Dict[str, float]) portfolio allocation - sum(allocation.values()) == 1.0
         """
         return self.portfolio.allocation
+        
+    def _update_exchange_graph(self, bid_ask_prices: Dict[str, Dict[str, float]]) -> None:
+        for ccy, prices in bid_ask_prices.items():
+            asset, base = ccy.split('-')
+            self.exchange_graph[asset][base].update(prices)
+            self.exchange_graph[base][asset].update(prices)
 
-    def step(self, bid_prices: Dict[str, float]) -> None:
+    def _validate_bid_ask_prices(self, bid_ask_prices: Dict[str, Dict[str, float]]) -> None:
+        for ccy, prices in bid_ask_prices:
+            if ccy not in self.portfolio.exchanges:
+                raise ValueError(f"bid_ask_prices contains unknown exchange: {ccy}")
+            elif 'ask' not in prices:
+                raise ValueError(f"missing ask data for exchange: {ccy}")
+            elif 'bid' not in prices:
+                raise ValueError(f"missing bid data for exchange: {ccy}")
+        for ccy in self.portfolio.exchanges:
+            if ccy not in bid_ask_prices:
+                raise ValueError(f"missing price data for exchange: {ccy}")
+
+    def step(self, bid_ask_prices: Dict[str, Dict[str, float]]) -> None:
         """
-        Step in environment and update portfolio value.
+        Step in environment and update portfolio values.
 
-        :param bid_prices: dictionary of the best bid price on each fiat exchange
+        :param bid_ask_prices: dictionary of the best bid and ask price on each exchange
         :return: (void)
         """
+        self._validate_bid_ask_prices(bid_ask_prices)
+        self._update_exchange_graph(bid_ask_prices)
+        bid_prices = {}
+        for c in self.portfolio.cryptos:
+            bid_prices[c] = self.exchange_graph[c][self.portfolio.fiat]['bid']
+        bid_prices[self.portfolio.fiat] = 1.0
         self.portfolio.step(bid_prices)
 
     def _validate_allocation(self, allocation: Dict[str, float]) -> None:
@@ -95,20 +132,51 @@ class MetaBroker(object):
             raise ValueError("Missing allocation for currency: " + \
                              f"{list(self.portfolio.currencies.keys())[missing_bid_prices.index(True)]}")
 
-    def allocate(self, target_allocation: Dict[str, float]) -> bool:
+    def reallocate(self, target_allocation: Dict[str, float]) -> bool:
         """
         Generate/execute market orders to shift current allocation to target allocation.
 
         :param allocation: (Dict[str, float]) fractional breakdown of currencies by fiat value
-        :return: (bool) TRUE if all orders were executed successfully, otherwise FALSE
+        :return: (bool) TRUE if target allocation reached, otherwise FALSE
         """
         self._validate_allocation(target_allocation)
+
+        # Check if we already reached target
+        if all([self.allocation[c] == target_allocation[c] \
+                for c in self.portfolio.currencies]):
+            return True
+
+        # get difference between current allocation and target
         allocation_diffs = {c: target_allocation - self.allocation for c in self.portfolio.currencies}
 
-        max_ingress = max(allocation_diffs.items(), key=operator.itemgetter(1))[0]
-        max_egress = min(allocation_diffs.items(), key=operator.itemgetter(1))[0]
+        # Identify largest positive and negative differences
+        max_ingress = max(allocation_diffs.items(), key=itemgetter(1))
+        max_egress = min(allocation_diffs.items(), key=itemgetter(1))
 
-        transfer_percent = min(abs(max_ingress), abs(max_egress))
+        exchange_data = self.exchange_graph[max_ingress[0]][max_egress[0]]
+
+        asset, base = exchange_data['ccy'].splt('-')
+
+        buying_asset = max_egress == asset
+
+        order_side = ['short', 'long'][int(buying_asset)]
+        price_basis = ['bid', 'ask'][int(buying_asset)]
+
+        order_price = exchange_data[price_basis]
+
+        transfer_percent = min(abs(max_ingress[1]), abs(max_egress[1]))
+
+        transfer_value_in_fiat = transfer_percent * self.portfolio.total_value
+
+        order_size = transfer_value_in_fiat / self.portfolio.bid_prices[base]
+
+        order = MarketOrder(ccy=exchange_data['ccy'],
+                            side=order_side,
+                            price=order_price,
+                            size=order_size)
+
+        self.portfolio.add_order(order)
+
 
     def get_statistics(self) -> dict:
         """
