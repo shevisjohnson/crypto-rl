@@ -15,7 +15,7 @@ import numpy as np
 from gym_trading.utils.portfolio import Portfolio
 from gym_trading.utils.order import MarketOrder
 from gym_trading.utils.exchange_graph import generate_exchange_graph
-from configurations import LOGGER, MAX_TRADES_PER_ACTION
+from configurations import LOGGER, MAX_TRADES_PER_ACTION, ALLOCATION_MARGIN
 
 class MetaBroker(object):
     def __init__(self,
@@ -174,7 +174,7 @@ class MetaBroker(object):
             order_side = ['short', 'long'][int(buying_asset)]
             price_basis = ['bid', 'ask'][int(buying_asset)]
             order_price = exchange_data[price_basis]
-            transfer_percent = min(abs(max_ingress[1]), abs(max_egress[1]))
+            transfer_percent = abs(max_egress[1])
             transfer_value_in_fiat = transfer_percent * self.portfolio.total_value
             transfer_value_in_base = transfer_value_in_fiat / self.portfolio.bid_prices[base]
             order_size = transfer_value_in_base / order_price
@@ -206,7 +206,7 @@ class MetaBroker(object):
         return False
 
     def _close_to(self, target_allocation: Dict[str, float]) -> bool:
-        if all([np.isclose(self.allocation[c], target_allocation[c], atol=0.01) \
+        if all([np.isclose(self.allocation[c], target_allocation[c], atol=ALLOCATION_MARGIN) \
                 for c in self.portfolio.currencies]):
             return True
         return False

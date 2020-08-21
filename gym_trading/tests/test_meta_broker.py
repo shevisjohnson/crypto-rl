@@ -74,7 +74,7 @@ class MetaBrokerTestCases(unittest.TestCase):
         self.assertNotEqual(realized_value_before_order, realized_value_after_order)
         self.assertNotEqual(realized_pnl_before_order, realized_pnl_after_order)
 
-    def run_single_reallocation_test(self):
+    def test_reallocation(self):
         exchange_rates = [
             11812.31,
             411.30,
@@ -95,34 +95,29 @@ class MetaBrokerTestCases(unittest.TestCase):
 
         self.broker.initialize(bid_ask_prices, inventory)
 
-        initial_allocation = self.broker.allocation
-
-        currency_range = range(len(self.broker.portfolio.currencies))
-        
-        nums = np.array([np.random.uniform() for _ in currency_range])
-        total = np.sum(nums)
-
-        target_allocation = {self.broker.portfolio.currencies[i]: nums[i] / total
-                             for i in currency_range}
-
-        #print()
-        #print("BEFORE", self.broker.allocation)
-        #print("TARGET", target_allocation)
-        reached_target = self.broker.reallocate(target_allocation)
-        #print("AFTER", self.broker.allocation)
-        #print(self.broker.portfolio)
-        return reached_target
-
-    def test_reallocation(self):
         cts = {True: 0.0, False: 0.0}
         for _ in range(100):
-            reached_target = self.run_single_reallocation_test()
-            self.broker.reset()
+            initial_allocation = self.broker.allocation
+
+            currency_range = range(len(self.broker.portfolio.currencies))
+            
+            nums = np.array([np.random.uniform() for _ in currency_range])
+            total = np.sum(nums)
+
+            target_allocation = {self.broker.portfolio.currencies[i]: nums[i] / total
+                                for i in currency_range}
+
+            #print()
+            #print("BEFORE", self.broker.allocation)
+            #print("TARGET", target_allocation)
+            reached_target = self.broker.reallocate(target_allocation)
+            #print("AFTER", self.broker.allocation)
+            #print(self.broker.portfolio)
             cts[reached_target] += 1.0
 
-        success_ratio = cts[True] / (cts[True] + cts[False])
-        print("SUCCESS_RATE", success_ratio)
-        self.assertGreaterEqual(success_ratio, 0.75)
+        success_rate = cts[True] / (cts[True] + cts[False])
+        print("SUCCESS_RATE", success_rate)
+        self.assertGreaterEqual(success_rate, 0.75)
 
     def test_get_statistics(self):
         self.zero_init()
