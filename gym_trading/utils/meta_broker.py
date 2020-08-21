@@ -10,12 +10,12 @@
 from typing import List, Dict, Optional
 from operator import itemgetter
 from collections import OrderedDict
-from numpy import isclose
+import numpy as np
 
 from gym_trading.utils.portfolio import Portfolio
 from gym_trading.utils.order import MarketOrder
 from gym_trading.utils.exchange_graph import generate_exchange_graph
-from configurations import LOGGER
+from configurations import LOGGER, MAX_TRADES_PER_ACTION
 
 class MetaBroker(object):
     def __init__(self,
@@ -27,8 +27,7 @@ class MetaBroker(object):
                  initial_bid_prices: Optional[Dict[str, float]] = None):
         """
         Wrapper around a portfolio which manages order planning/execution
-        and monitors trade statistics. Also responsible for retrospectivly
-        determining the optimal portfolio allocation for a previous timestep.
+        and monitors trade statistics.
 
         :param fiat: (str)
         :param cryptos: (List[str])
@@ -43,7 +42,7 @@ class MetaBroker(object):
                                    transaction_fee=transaction_fee,
                                    initial_inventory=initial_inventory,
                                    initial_bid_prices=initial_bid_prices)
-        self.exchange_graph = generate_exchange_graph(self.portfolio.currencies)
+        self.exchange_graph = generate_exchange_graph(self.portfolio.exchanges)
 
     def reset(self) -> None:
         """
@@ -51,7 +50,7 @@ class MetaBroker(object):
 
         :return: (void)
         """
-        self.exchange_graph = generate_exchange_graph(self.portfolio.currencies)
+        self.exchange_graph = generate_exchange_graph(self.portfolio.exchanges)
         self.portfolio.reset()
 
     def initialize(self, 
@@ -89,7 +88,7 @@ class MetaBroker(object):
             self.exchange_graph[base][asset].update(prices)
 
     def _validate_bid_ask_prices(self, bid_ask_prices: Dict[str, Dict[str, float]]) -> None:
-        for ccy, prices in bid_ask_prices:
+        for ccy, prices in bid_ask_prices.items():
             if ccy not in self.portfolio.exchanges:
                 raise ValueError(f"bid_ask_prices contains unknown exchange: {ccy}")
             elif 'ask' not in prices:
@@ -123,7 +122,7 @@ class MetaBroker(object):
         :param allocation: (Dict[str, float]) fractional breakdown of currencies by fiat value
         :return: (void)
         """
-        if sum(allocation.values()) != 1.0:
+        if not np.isclose(np.float64(np.sum(np.array(list(allocation.values())))), np.float64(1.0)):
             raise ValueError(f"Invalid allocation doesn't add up to 1.0: {allocation}")
         invalid_allocations = [k not in self.portfolio.currencies for k in allocation]
         missing_allocations = [k not in allocation for k in self.portfolio.currencies]
@@ -136,24 +135,24 @@ class MetaBroker(object):
 
     def reallocate(self, target_allocation: Dict[str, float]) -> bool:
         """
-        Generate/execute market orders to shift current allocation to target allocation.
+        Generate and execute market orders to shift from current allocation to target allocation.
 
-        :param allocation: (Dict[str, float]) fractional breakdown of currencies by fiat value
+        :param target_allocation: (Dict[str, float]) fractional breakdown of currencies by fiat value
         :return: (bool) TRUE if target allocation reached, otherwise FALSE
         """
         self._validate_allocation(target_allocation)
 
-        # Check whether we have reached our target
-        if all([isclose(self.allocation[c], target_allocation[c]) \
-                    for c in self.portfolio.currencies]):
-                return True
+        # Short circuit if we have already reached our target
+        if self._close_to(target_allocation):
+            return True
 
-        for _ in range(len(self.portfolio.exchanges)):
+        for _ in range(MAX_TRADES_PER_ACTION):
             # get difference between current allocation and target
-            allocation_diffs = {c: target_allocation - self.allocation for c in self.portfolio.currencies}
+            allocation_diffs = {c: target_allocation[c] - self.allocation[c] 
+                                for c in self.portfolio.currencies}
 
             # Identify positive and negative differences with maximum magnitude
-            sorted_diffs = OrderedDict(sorted(list(allocation_diffs.items()), key=itemgetter(1)))
+            sorted_diffs = sorted(list(allocation_diffs.items()), key=itemgetter(1))
 
             ingress_idx = -1
             egress_idx = 0
@@ -161,39 +160,34 @@ class MetaBroker(object):
             max_ingress = sorted_diffs[ingress_idx]
             max_egress = sorted_diffs[egress_idx]
 
-            light_switch = [True, True]
-            idx_mod = 1
-
-            # If the two largest magnitudes aren't exchangable,
-            # try progressively smaller ones until a match is found.
-            while max_egress[0] not in self.exchange_graph[max_ingress[0]]:
-                if egress_idx >= len(self.portfolio.exchanges)-1 or \
-                ingress_idx <= -(len(self.portfolio.exchanges)):
-                    raise ValueError(f"No available eschanges.")
-                if light_switch[0]:
-                    if light_switch[1]:
-                        max_egress = sorted_diffs[egress_idx + idx_mod]
-                        max_ingress = sorted_diffs[ingress_idx]
-                    else:
-                        max_egress = sorted_diffs[egress_idx]
-                        max_ingress = sorted_diffs[ingress_idx - idx_mod]
-                        light_switch[0] = not light_switch[0]
-                else:
-                    # bump idx_mod and reset lightswitch
-                    idx_mod += 1
-                    light_switch[1] = not light_switch[1]
-                    light_switch[0] = not light_switch[0]
+            if max_egress[0] not in self.exchange_graph[max_ingress[0]]:
+                for i in range(1, len(self.portfolio.currencies)):
+                    new_ingress = sorted_diffs[ingress_idx - i]
+                    if max_egress[0] in self.exchange_graph[new_ingress[0]]:
+                        max_ingress = new_ingress
+                        break
 
             # Generate order details
             exchange_data = self.exchange_graph[max_ingress[0]][max_egress[0]]
-            asset, base = exchange_data['ccy'].splt('-')
-            buying_asset = max_egress == asset
+            asset, base = exchange_data['ccy'].split('-')
+            buying_asset = max_ingress[0] == asset
             order_side = ['short', 'long'][int(buying_asset)]
             price_basis = ['bid', 'ask'][int(buying_asset)]
             order_price = exchange_data[price_basis]
             transfer_percent = min(abs(max_ingress[1]), abs(max_egress[1]))
             transfer_value_in_fiat = transfer_percent * self.portfolio.total_value
-            order_size = transfer_value_in_fiat / self.portfolio.bid_prices[base]
+            transfer_value_in_base = transfer_value_in_fiat / self.portfolio.bid_prices[base]
+            order_size = transfer_value_in_base / order_price
+
+            LOGGER.debug("exchange_data", exchange_data)
+            LOGGER.debug("order_side", order_side)
+            LOGGER.debug("order_price", order_price)
+            LOGGER.debug("transfer_percent", transfer_percent)
+            LOGGER.debug("transfer_value_in_fiat", transfer_value_in_fiat)
+            LOGGER.debug("transfer_value_in_base", transfer_value_in_base)
+            LOGGER.debug("order_size", order_size)
+
+            LOGGER.debug("old allocation", self.portfolio.allocation)
 
             # Create and execute order
             order = MarketOrder(ccy=exchange_data['ccy'],
@@ -202,14 +196,20 @@ class MetaBroker(object):
                                 size=order_size)
             self.portfolio.add_order(order)
 
+            LOGGER.debug("new allocation", self.portfolio.allocation)
+            LOGGER.debug("-----------------------------")
+
             # Check whether we have reached our target
-            if all([isclose(self.allocation[c], target_allocation[c]) \
-                    for c in self.portfolio.currencies]):
+            if self._close_to(target_allocation):
                 return True
-        # If we got here without reaching our target, call it quits.
-        # reallocation should never make more then 1 trade per exchange
+        # Reached maximum number of trades
         return False
 
+    def _close_to(self, target_allocation: Dict[str, float]) -> bool:
+        if all([np.isclose(self.allocation[c], target_allocation[c], atol=0.01) \
+                for c in self.portfolio.currencies]):
+            return True
+        return False
 
     def get_statistics(self) -> dict:
         """

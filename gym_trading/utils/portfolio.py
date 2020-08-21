@@ -220,7 +220,12 @@ class Portfolio(object):
         egress_amount = order.size * egress_price
 
         if self.inventory[egress_sym] < egress_amount:
-            LOGGER.info(f"Invalid order, too large. [ccy={order.ccy}, cost={egress_amount}, available={self.inventory[egress_sym]}]")
+            LOGGER.info(f"Invalid order, too large.")
+            LOGGER.info(dict(ccy=order.ccy, 
+                             cost=egress_amount,
+                             available=self.inventory[egress_sym],
+                             size=order.size,
+                             side=order.side))
             return False
 
         # Update portfolio inventory attributes

@@ -43,6 +43,7 @@ LIMIT_ORDER_FEE = 0.0
 SLIPPAGE = 0.0005
 
 # ./gym_trading/utils/meta_broker.py
+MAX_TRADES_PER_ACTION = 100
 FIAT = 'USD'
 CRYPTOS = [
     'BTC',
