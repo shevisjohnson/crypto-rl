@@ -21,6 +21,14 @@ class Portfolio(object):
                  transaction_fee: bool = True,
                  initial_inventory: Optional[Dict[str, float]] = None,
                  initial_bid_prices: Optional[Dict[str, float]] = None):
+        """
+        :param fiat: (str)
+        :param cryptos: (List[str])
+        :param exchanges: (List[str])
+        :param transaction_fee: (bool)
+        :param initial_inventory: (Optional[Dict[str, float]])
+        :param initial_bid_prices: (Optional[Dict[str, float]])
+        """
         self.transaction_fee = transaction_fee
         self.fiat = fiat
         self.cryptos = cryptos
@@ -137,20 +145,15 @@ class Portfolio(object):
             return (self.realized_value / self.initial_realized_value) - 1.0
         return 0.0
 
-    def _initialize_inventory(self, inventory: Dict[str, float] = {}) -> None:
-        self._validate_inventory(inventory)
-        self.inventory.update(inventory)
-
-    def _initialize_bid_prices(self, bid_prices: Dict[str, float]) -> None:
-        self._validate_bid_prices(bid_prices)
-        self.bid_prices.update(bid_prices)
-        self.bid_prices[self.fiat] = 1.0
-
     def _validate_inventory(self, inventory: Dict[str, float]) -> None:
         invalid_inventory_items = [k not in self.currencies for k in inventory]
         if any(invalid_inventory_items):
             raise ValueError("inventory contains unknown currency: " + \
                              f"{list(inventory.keys())[invalid_inventory_items.index(True)]}")
+
+    def _initialize_inventory(self, inventory: Dict[str, float] = {}) -> None:
+        self._validate_inventory(inventory)
+        self.inventory.update(inventory)
 
     def _validate_bid_prices(self, bid_prices: Dict[str, float]) -> None:
         invalid_bid_prices = [k not in self.currencies for k in bid_prices]
@@ -161,6 +164,11 @@ class Portfolio(object):
         if any(missing_bid_prices):
             raise ValueError("Missing bid price for currency: " + \
                              f"{list(self.currencies.keys())[missing_bid_prices.index(True)]}")
+
+    def _initialize_bid_prices(self, bid_prices: Dict[str, float]) -> None:
+        self._validate_bid_prices(bid_prices)
+        self.bid_prices.update(bid_prices)
+        self.bid_prices[self.fiat] = 1.0
 
     def step(self, bid_prices: Dict[str, float]) -> None:
         """
