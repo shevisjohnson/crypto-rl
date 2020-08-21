@@ -9,6 +9,8 @@
 #
 from typing import List, Dict, Optional
 from operator import itemgetter
+from collections import OrderedDict
+from numpy import isclose
 
 from gym_trading.utils.portfolio import Portfolio
 from gym_trading.utils.order import MarketOrder
@@ -141,41 +143,72 @@ class MetaBroker(object):
         """
         self._validate_allocation(target_allocation)
 
-        # Check if we already reached target
-        if all([self.allocation[c] == target_allocation[c] \
-                for c in self.portfolio.currencies]):
-            return True
+        # Check whether we have reached our target
+        if all([isclose(self.allocation[c], target_allocation[c]) \
+                    for c in self.portfolio.currencies]):
+                return True
 
-        # get difference between current allocation and target
-        allocation_diffs = {c: target_allocation - self.allocation for c in self.portfolio.currencies}
+        for _ in range(len(self.portfolio.exchanges)):
+            # get difference between current allocation and target
+            allocation_diffs = {c: target_allocation - self.allocation for c in self.portfolio.currencies}
 
-        # Identify largest positive and negative differences
-        max_ingress = max(allocation_diffs.items(), key=itemgetter(1))
-        max_egress = min(allocation_diffs.items(), key=itemgetter(1))
+            # Identify positive and negative differences with maximum magnitude
+            sorted_diffs = OrderedDict(sorted(list(allocation_diffs.items()), key=itemgetter(1)))
 
-        exchange_data = self.exchange_graph[max_ingress[0]][max_egress[0]]
+            ingress_idx = -1
+            egress_idx = 0
 
-        asset, base = exchange_data['ccy'].splt('-')
+            max_ingress = sorted_diffs[ingress_idx]
+            max_egress = sorted_diffs[egress_idx]
 
-        buying_asset = max_egress == asset
+            light_switch = [True, True]
+            idx_mod = 1
 
-        order_side = ['short', 'long'][int(buying_asset)]
-        price_basis = ['bid', 'ask'][int(buying_asset)]
+            # If the two largest magnitudes aren't exchangable,
+            # try progressively smaller ones until a match is found.
+            while max_egress[0] not in self.exchange_graph[max_ingress[0]]:
+                if egress_idx >= len(self.portfolio.exchanges)-1 or \
+                ingress_idx <= -(len(self.portfolio.exchanges)):
+                    raise ValueError(f"No available eschanges.")
+                if light_switch[0]:
+                    if light_switch[1]:
+                        max_egress = sorted_diffs[egress_idx + idx_mod]
+                        max_ingress = sorted_diffs[ingress_idx]
+                    else:
+                        max_egress = sorted_diffs[egress_idx]
+                        max_ingress = sorted_diffs[ingress_idx - idx_mod]
+                        light_switch[0] = not light_switch[0]
+                else:
+                    # bump idx_mod and reset lightswitch
+                    idx_mod += 1
+                    light_switch[1] = not light_switch[1]
+                    light_switch[0] = not light_switch[0]
 
-        order_price = exchange_data[price_basis]
+            # Generate order details
+            exchange_data = self.exchange_graph[max_ingress[0]][max_egress[0]]
+            asset, base = exchange_data['ccy'].splt('-')
+            buying_asset = max_egress == asset
+            order_side = ['short', 'long'][int(buying_asset)]
+            price_basis = ['bid', 'ask'][int(buying_asset)]
+            order_price = exchange_data[price_basis]
+            transfer_percent = min(abs(max_ingress[1]), abs(max_egress[1]))
+            transfer_value_in_fiat = transfer_percent * self.portfolio.total_value
+            order_size = transfer_value_in_fiat / self.portfolio.bid_prices[base]
 
-        transfer_percent = min(abs(max_ingress[1]), abs(max_egress[1]))
+            # Create and execute order
+            order = MarketOrder(ccy=exchange_data['ccy'],
+                                side=order_side,
+                                price=order_price,
+                                size=order_size)
+            self.portfolio.add_order(order)
 
-        transfer_value_in_fiat = transfer_percent * self.portfolio.total_value
-
-        order_size = transfer_value_in_fiat / self.portfolio.bid_prices[base]
-
-        order = MarketOrder(ccy=exchange_data['ccy'],
-                            side=order_side,
-                            price=order_price,
-                            size=order_size)
-
-        self.portfolio.add_order(order)
+            # Check whether we have reached our target
+            if all([isclose(self.allocation[c], target_allocation[c]) \
+                    for c in self.portfolio.currencies]):
+                return True
+        # If we got here without reaching our target, call it quits.
+        # reallocation should never make more then 1 trade per exchange
+        return False
 
 
     def get_statistics(self) -> dict:
