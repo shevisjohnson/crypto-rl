@@ -1,11 +1,13 @@
 import logging
 import os
+import numpy as np
 
 import pytz as tz
 
 # singleton for logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 LOGGER = logging.getLogger('crypto_rl_log')
+
 
 # ./recorder.py
 SNAPSHOT_RATE = 1.0  # For example, 0.25 = 4x per second
@@ -38,9 +40,9 @@ TIMEZONE = tz.utc
 SNAPSHOT_RATE_IN_MICROSECONDS = 1000000  # 1 second
 
 # ./gym_trading/utils/broker.py
-MARKET_ORDER_FEE = 0.005 # Taker fee 0.05% (https://pro.coinbase.com/orders/fees)
-LIMIT_ORDER_FEE = 0.0
-SLIPPAGE = 0.0005
+MARKET_ORDER_FEE = np.float64(0.005) # Taker fee 0.05% (https://pro.coinbase.com/orders/fees)
+LIMIT_ORDER_FEE = np.float64(0)
+SLIPPAGE = np.float64(0.0005)
 
 # ./gym_trading/utils/meta_broker.py
 FIAT = 'USD'
@@ -62,14 +64,14 @@ EXCHANGES = [
     'LINK-ETH',
 ]
 INITIAL_ALLOCATION = {
-    'USD': 1.0,
-    'BTC': 0.0,
-    'ETH': 0.0,
-    'XLM': 0.0,
-    'LINK': 0.0,
+    'USD': np.float64(1),
+    'BTC': np.float64(0),
+    'ETH': np.float64(0),
+    'XLM': np.float64(0),
+    'LINK': np.float64(0),
 }
 MAX_TRADES_PER_ACTION = 10
-ALLOCATION_TOLERANCE = 0.001
+ALLOCATION_TOLERANCE = np.float64(0.001)
 # will try to get within ALLOCATION_TOLERANCE of target
 # allocation using no more than MAX_TRADES_PER_ACTION orders
 

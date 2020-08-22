@@ -1,6 +1,8 @@
 from typing import List, Dict, Union
+from gym_trading.utils.position import Position
+from numpy import float64
 
-def generate_exchange_graph(exchanges: List[str]) -> Dict[str, Dict[str,  Dict[str, Union[str, float]]]]:
+def generate_exchange_graph(exchanges: List[str]) -> Dict[str, Dict[str,  Dict[str, Union[str, float64]]]]:
     """
     Creates an undirected graph from list of exchanges. 
     Currencies and exchanges are represented as vertices and edges respectively.
@@ -17,37 +19,37 @@ def generate_exchange_graph(exchanges: List[str]) -> Dict[str, Dict[str,  Dict[s
         'USD': {
             'BTC': {
                 'ccy': 'BTC-USD',
-                'ask': 0.2345,
-                'bid': 1.234,
+                'ask': 0.0,
+                'bid': 0.0,
             },
             'ETH': {
                 'ccy': 'ETH-USD',
-                'ask': 0.2345,
-                'bid': 1.234,
+                'ask': 0.0,
+                'bid': 0.0,
             }
         }
         'BTC': {
             'USD': {
                 'ccy': 'BTC-USD',
-                'ask': 0.2345,
-                'bid': 1.234,
+                'ask': 0.0,
+                'bid': 0.0,
             },
             'ETH': {
                 'ccy': 'ETH-BTC',
-                'ask': 0.2345,
-                'bid': 1.234,
+                'ask': 0.0,
+                'bid': 0.0,
             },
         }
         'ETH': {
             'BTC': {
                 'ccy': 'ETH-BTC',
-                'ask': 0.2345,
-                'bid': 1.234,
+                'ask': 0.0,
+                'bid': 0.0,
             },
             'USD': {
                 'ccy': 'ETH-USD',
-                'ask': 0.2345,
-                'bid': 1.234,
+                'ask': 0.0,
+                'bid': 0.0,
             },
         }
     }
@@ -70,8 +72,8 @@ def generate_exchange_graph(exchanges: List[str]) -> Dict[str, Dict[str,  Dict[s
                 idx = int(not bool(edge_ends.index(vertex)))
                 edges[edge_ends[idx]] = {
                     'ccy': edge,
-                    'ask': 0.0,
-                    'bid': 0.0,
+                    'ask': float64(0),
+                    'bid': float64(0),
                 }
         graph[vertex] = edges
     return graph

@@ -35,6 +35,30 @@ class TradeStatistics(object):
         self.orders_updated = 0
         self.market_orders = 0
 
+class PortfolioStatistics(object):
+    """
+    Class for storing order metrics performed by the portfolio optimizer agent.
+    """
+
+    def __init__(self):
+        """
+        Instantiate the class.
+        """
+        self.market_orders = 0
+
+    def __str__(self):
+        return ('PortfolioStatistics:\n'
+                'market_orders = \t{}').format(
+            self.market_orders
+        )
+
+    def reset(self) -> None:
+        """
+        Reset all trackers.
+
+        :return: (void)
+        """
+        self.market_orders = 0
 
 class ExperimentStatistics(object):
 

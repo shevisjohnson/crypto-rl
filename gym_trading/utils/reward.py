@@ -1,6 +1,5 @@
 import numpy as np
 
-
 def default(inventory_count: int, midpoint_change: float) -> float:
     """
     Default reward type for environments, which is derived from PnL and order quantity.
@@ -168,4 +167,4 @@ def distance_from_optimal_allocation(allocation: np.ndarray, optimal_allocation:
     :return: reward - element of (-1.0, 1.0)
     """
     r2 = np.sqrt(2)
-    return 2 * ((r2 - np.linalg.norm(allocation-optimal_allocation) / r2) - 0.5)
+    return np.float64(2 * ((r2 - np.linalg.norm(allocation-optimal_allocation) / r2) - 0.5))

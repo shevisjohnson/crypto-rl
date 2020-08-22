@@ -4,6 +4,8 @@
 #
 #
 from abc import ABC
+from typing import Union
+from numpy import float64
 
 from configurations import LIMIT_ORDER_FEE, LOGGER, MARKET_ORDER_FEE
 
@@ -30,8 +32,8 @@ class Order(ABC):
     LIMIT_ORDER_FEE = LIMIT_ORDER_FEE
     MARKET_ORDER_FEE = MARKET_ORDER_FEE
 
-    def __init__(self, price: float, step: int, average_execution_price: float,
-                 order_type='limit', ccy='BTC-USD', side='long', size: float = DEFAULT_SIZE):
+    def __init__(self, price: Union[float, float64], step: int, average_execution_price: float,
+                 order_type='limit', ccy='BTC-USD', side='long', size: Union[float, float64] = DEFAULT_SIZE):
         """
 
         :param price:
@@ -69,7 +71,7 @@ class Order(ABC):
         """
         return self.executed >= self.size
 
-    def update_metrics(self, price: float, step: int) -> None:
+    def update_metrics(self, price: Union[float, float64], step: int) -> None:
         """
         Update specific position metrics per each order.
 
@@ -86,7 +88,7 @@ class Order(ABC):
                 unrealized_pnl = (self.average_execution_price - price) / \
                                  self.average_execution_price
             else:
-                unrealized_pnl = 0.0
+                unrealized_pnl = float64(0)
                 LOGGER.warning('alert: unknown order.step() side %s' % self.side)
 
             if unrealized_pnl < self.metrics.drawdown_max:
@@ -97,7 +99,7 @@ class Order(ABC):
 
 
 class MarketOrder(Order):
-    def __init__(self, ccy='BTC-USD', side='long', price=0.0, step=-1, size: float = Order.DEFAULT_SIZE):
+    def __init__(self, ccy='BTC-USD', side='long', price=0.0, step=-1, size = Order.DEFAULT_SIZE):
         super(MarketOrder, self).__init__(price=price,
                                           step=step,
                                           average_execution_price=-1,
