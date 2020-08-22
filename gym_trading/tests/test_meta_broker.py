@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 from scipy.special import softmax
 from copy import deepcopy
-from pprint import pprint
+from pprint import pprint, pformat
 
 from gym_trading.utils.order import MarketOrder
 from gym_trading.utils.meta_broker import MetaBroker
@@ -96,7 +96,7 @@ class MetaBrokerTestCases(unittest.TestCase):
         self.broker.initialize(bid_ask_prices, inventory)
 
         cts = {True: 0.0, False: 0.0}
-        for _ in range(100):
+        for _ in range(1000):
             initial_allocation = self.broker.allocation
 
             currency_range = range(len(self.broker.portfolio.currencies))
@@ -104,20 +104,28 @@ class MetaBrokerTestCases(unittest.TestCase):
             nums = np.array([np.random.uniform() for _ in currency_range])
             total = np.sum(nums)
 
+            prior_allocation = self.broker.allocation
+
             target_allocation = {self.broker.portfolio.currencies[i]: nums[i] / total
                                 for i in currency_range}
-
-            #print()
-            #print("BEFORE", self.broker.allocation)
-            #print("TARGET", target_allocation)
+            prior_trades = self.broker.portfolio.total_trade_count
             reached_target = self.broker.reallocate(target_allocation)
-            #print("AFTER", self.broker.allocation)
-            #print(self.broker.portfolio)
+            if not reached_target:
+                allocation_diffs = [target_allocation[c] - self.broker.allocation[c] 
+                                    for c in self.broker.portfolio.currencies]
+                logs = {
+                    "BEFORE": prior_allocation,
+                    "TARGET": target_allocation,
+                    "AFTER": self.broker.allocation,
+                    "DIFF": allocation_diffs,
+                    "TRADES": self.broker.portfolio.total_trade_count - prior_trades,
+                }
+                self.assertLessEqual(max(allocation_diffs), 0.01, f"should never miss target by more than 1%.\n{pformat(logs)}")
             cts[reached_target] += 1.0
 
         success_rate = cts[True] / (cts[True] + cts[False])
-        print("SUCCESS_RATE", success_rate)
-        self.assertGreaterEqual(success_rate, 0.75)
+        #print("SUCCESS_RATE", success_rate)
+        self.assertGreaterEqual(success_rate, 0.75, 'should hit target more than 75% of the time')
 
     def test_get_statistics(self):
         self.zero_init()

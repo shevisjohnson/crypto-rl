@@ -43,7 +43,6 @@ LIMIT_ORDER_FEE = 0.0
 SLIPPAGE = 0.0005
 
 # ./gym_trading/utils/meta_broker.py
-MAX_TRADES_PER_ACTION = 10
 FIAT = 'USD'
 CRYPTOS = [
     'BTC',
@@ -69,7 +68,10 @@ INITIAL_ALLOCATION = {
     'XLM': 0.0,
     'LINK': 0.0,
 }
-ALLOCATION_MARGIN = 0.001
+MAX_TRADES_PER_ACTION = 10
+ALLOCATION_TOLERANCE = 0.001
+# will try to get within ALLOCATION_TOLERANCE of target
+# allocation using no more than MAX_TRADES_PER_ACTION orders
 
 # ./indicators/*
 INDICATOR_WINDOW = [60 * i for i in [5, 15]]  # Convert minutes to seconds

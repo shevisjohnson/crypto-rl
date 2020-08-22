@@ -15,7 +15,7 @@ import numpy as np
 from gym_trading.utils.portfolio import Portfolio
 from gym_trading.utils.order import MarketOrder
 from gym_trading.utils.exchange_graph import generate_exchange_graph
-from configurations import LOGGER, MAX_TRADES_PER_ACTION, ALLOCATION_MARGIN
+from configurations import LOGGER, MAX_TRADES_PER_ACTION, ALLOCATION_TOLERANCE
 
 class MetaBroker(object):
     def __init__(self,
@@ -160,10 +160,12 @@ class MetaBroker(object):
             max_ingress = sorted_diffs[ingress_idx]
             max_egress = sorted_diffs[egress_idx]
 
+            # If no available exchange, find a middleman currency
             if max_egress[0] not in self.exchange_graph[max_ingress[0]]:
                 for i in range(1, len(self.portfolio.currencies)):
                     new_ingress = sorted_diffs[ingress_idx - i]
-                    if max_egress[0] in self.exchange_graph[new_ingress[0]]:
+                    if max_egress[0] in self.exchange_graph[new_ingress[0]] and \
+                       max_ingress[0] in self.exchange_graph[new_ingress[0]]:
                         max_ingress = new_ingress
                         break
 
@@ -206,7 +208,7 @@ class MetaBroker(object):
         return False
 
     def _close_to(self, target_allocation: Dict[str, float]) -> bool:
-        if all([np.isclose(self.allocation[c], target_allocation[c], atol=ALLOCATION_MARGIN) \
+        if all([np.isclose(self.allocation[c], target_allocation[c], atol=ALLOCATION_TOLERANCE) \
                 for c in self.portfolio.currencies]):
             return True
         return False
