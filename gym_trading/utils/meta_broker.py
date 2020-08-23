@@ -25,8 +25,8 @@ class MetaBroker(object):
                  cryptos: List[str] = ['ETH', 'BTC'],
                  exchanges: List[str] = ['BTC-USD', 'ETH-USD', 'ETH-BTC'],
                  transaction_fee: bool = True,
-                 initial_inventory: Optional[Dict[str, np.float64]] = None,
-                 initial_bid_prices: Optional[Dict[str, np.float64]] = None):
+                 initial_inventory: Optional[Dict[str, np.float32]] = None,
+                 initial_bid_prices: Optional[Dict[str, np.float32]] = None):
         """
         Wrapper around a portfolio which manages order planning/execution
         and monitors trade statistics.
@@ -35,8 +35,8 @@ class MetaBroker(object):
         :param cryptos: (List[str])
         :param exchanges: (List[str])
         :param transaction_fee: (bool)
-        :param initial_inventory: (Optional[Dict[str, np.float64]])
-        :param initial_bid_prices: (Optional[Dict[str, np.float64]])
+        :param initial_inventory: (Optional[Dict[str, np.float32]])
+        :param initial_bid_prices: (Optional[Dict[str, np.float32]])
         """
         self.portfolio = Portfolio(fiat=fiat,
                                    cryptos=cryptos,
@@ -56,14 +56,14 @@ class MetaBroker(object):
         self.portfolio.reset()
 
     def initialize(self, 
-                   bid_ask_prices: Dict[str, Dict[str, np.float64]], 
-                   inventory: Dict[str, np.float64] = {}) -> None:
+                   bid_ask_prices: Dict[str, Dict[str, np.float32]], 
+                   inventory: Dict[str, np.float32] = {}) -> None:
         """
         Adds starting values to the portfolio and exchagne graph.
 
-        :param bid_ask_prices: (Dict[str, Dict[str, np.float64]]) the most recent bid/ask prices for each
+        :param bid_ask_prices: (Dict[str, Dict[str, np.float32]]) the most recent bid/ask prices for each
             exchange. Keys are the exchange symbol
-        :param inventory: (Dict[str, np.float64]) maps currenies to starting amount
+        :param inventory: (Dict[str, np.float32]) maps currenies to starting amount
         :return: (void)
         """
         self._validate_bid_ask_prices(bid_ask_prices)
@@ -71,25 +71,37 @@ class MetaBroker(object):
         bid_prices = {}
         for c in self.portfolio.cryptos:
             bid_prices[c] = self.exchange_graph[c][self.portfolio.fiat]['bid']
-        bid_prices[self.portfolio.fiat] = np.float64(1)
+        bid_prices[self.portfolio.fiat] = np.float32(1)
         self.portfolio.initialize(bid_prices, inventory)
 
     @property
-    def allocation(self) -> Dict[str, np.float64]:
+    def allocation(self) -> Dict[str, np.float32]:
         """
         The fractional breakdown of currencies by fiat value
 
-        :return: (Dict[str, np.float64]) portfolio allocation - sum(allocation.values()) == np.float64(1)
+        :return: (Dict[str, np.float32]) portfolio allocation - sum(allocation.values()) == np.float32(1)
         """
         return self.portfolio.allocation
+
+    @property
+    def realized_pnl(self) -> np.float32:
+        return self.portfolio.realized_pnl
+
+    @property
+    def pnl(self) -> np.float32:
+        return self.portfolio.pnl
+
+    @property
+    def total_trade_count(self) -> np.float32:
+        return self.portfolio.total_trade_count
         
-    def _update_exchange_graph(self, bid_ask_prices: Dict[str, Dict[str, np.float64]]) -> None:
+    def _update_exchange_graph(self, bid_ask_prices: Dict[str, Dict[str, np.float32]]) -> None:
         for ccy, prices in bid_ask_prices.items():
             asset, base = ccy.split('-')
             self.exchange_graph[asset][base].update(prices)
             self.exchange_graph[base][asset].update(prices)
 
-    def _validate_bid_ask_prices(self, bid_ask_prices: Dict[str, Dict[str, np.float64]]) -> None:
+    def _validate_bid_ask_prices(self, bid_ask_prices: Dict[str, Dict[str, np.float32]]) -> None:
         for ccy, prices in bid_ask_prices.items():
             if ccy not in self.portfolio.exchanges:
                 raise ValueError(f"bid_ask_prices contains unknown exchange: {ccy}")
@@ -101,7 +113,7 @@ class MetaBroker(object):
             if ccy not in bid_ask_prices:
                 raise ValueError(f"missing price data for exchange: {ccy}")
 
-    def step(self, bid_ask_prices: Dict[str, Dict[str, np.float64]]) -> None:
+    def step(self, bid_ask_prices: Dict[str, Dict[str, np.float32]]) -> None:
         """
         Step in environment and update portfolio values.
 
@@ -113,19 +125,19 @@ class MetaBroker(object):
         bid_prices = {}
         for c in self.portfolio.cryptos:
             bid_prices[c] = self.exchange_graph[c][self.portfolio.fiat]['bid']
-        bid_prices[self.portfolio.fiat] = np.float64(1)
+        bid_prices[self.portfolio.fiat] = np.float32(1)
         self.portfolio.step(bid_prices)
 
-    def _validate_allocation(self, allocation: Dict[str, np.float64]) -> None:
+    def _validate_allocation(self, allocation: Dict[str, np.float32]) -> None:
         """
         Throws an error if allocation has unknown or missing currencies, or
         if the sum of allocations don't add up to 1.
 
-        :param allocation: (Dict[str, np.float64]) fractional breakdown of currencies by fiat value
+        :param allocation: (Dict[str, np.float32]) fractional breakdown of currencies by fiat value
         :return: (void)
         """
-        allocation_sum = np.float64(np.sum(list(allocation.values())))
-        if not np.isclose(allocation_sum, np.float64(1)):
+        allocation_sum = np.float32(np.sum(list(allocation.values())))
+        if not np.isclose(allocation_sum, np.float32(1)):
             raise ValueError(f"Invalid allocation doesn't add up to 1.0: sum({allocation}) == {allocation_sum}")
         invalid_allocations = [k not in self.portfolio.currencies for k in allocation]
         missing_allocations = [k not in allocation for k in self.portfolio.currencies]
@@ -136,11 +148,11 @@ class MetaBroker(object):
             raise ValueError("Missing allocation for currency: " + \
                              f"{list(self.portfolio.currencies.keys())[missing_bid_prices.index(True)]}")
 
-    def reallocate(self, target_allocation: Dict[str, np.float64]) -> bool:
+    def reallocate(self, target_allocation: Dict[str, np.float32]) -> bool:
         """
         Generate and execute market orders to shift from current allocation to target allocation.
 
-        :param target_allocation: (Dict[str, np.float64]) fractional breakdown of currencies by fiat value
+        :param target_allocation: (Dict[str, np.float32]) fractional breakdown of currencies by fiat value
         :return: (bool) TRUE if target allocation reached, otherwise FALSE
         """
         self._validate_allocation(target_allocation)
@@ -218,8 +230,8 @@ class MetaBroker(object):
 
         :return: statistics
         """
-        realized_pnl = self.portfolio.realized_pnl * np.float64(100)
-        notional_pnl = self.portfolio.pnl * np.float64(100)
+        realized_pnl = self.portfolio.realized_pnl * np.float32(100)
+        notional_pnl = self.portfolio.pnl * np.float32(100)
         return dict(
             market_orders=self.portfolio.statistics.market_orders,
             notional_pnl= "{value:+.{precision}f}%".format(value=notional_pnl,precision=3),

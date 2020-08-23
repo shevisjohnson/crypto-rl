@@ -40,9 +40,9 @@ TIMEZONE = tz.utc
 SNAPSHOT_RATE_IN_MICROSECONDS = 1000000  # 1 second
 
 # ./gym_trading/utils/broker.py
-MARKET_ORDER_FEE = np.float64(0.005) # Taker fee 0.05% (https://pro.coinbase.com/orders/fees)
-LIMIT_ORDER_FEE = np.float64(0)
-SLIPPAGE = np.float64(0.0005)
+MARKET_ORDER_FEE = np.float32(0.005) # Taker fee 0.05% (https://pro.coinbase.com/orders/fees)
+LIMIT_ORDER_FEE = np.float32(0)
+SLIPPAGE = np.float32(0.0005)
 
 # ./gym_trading/utils/meta_broker.py
 FIAT = 'USD'
@@ -64,14 +64,14 @@ EXCHANGES = [
     'LINK-ETH',
 ]
 INITIAL_ALLOCATION = {
-    'USD': np.float64(1),
-    'BTC': np.float64(0),
-    'ETH': np.float64(0),
-    'XLM': np.float64(0),
-    'LINK': np.float64(0),
+    'USD': np.float32(1),
+    'BTC': np.float32(0),
+    'ETH': np.float32(0),
+    'XLM': np.float32(0),
+    'LINK': np.float32(0),
 }
 MAX_TRADES_PER_ACTION = 10
-ALLOCATION_TOLERANCE = np.float64(0.001)
+ALLOCATION_TOLERANCE = np.float32(0.001)
 # will try to get within ALLOCATION_TOLERANCE of target
 # allocation using no more than MAX_TRADES_PER_ACTION orders
 

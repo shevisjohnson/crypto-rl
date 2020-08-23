@@ -68,7 +68,7 @@ class Position(object):
         """
         return self.positions.__len__()
 
-    def _process_transaction_volume(self, volume: np.float64) -> None:
+    def _process_transaction_volume(self, volume: np.float32) -> None:
         """
         Handle order executions in LOB queue.
 
@@ -80,8 +80,8 @@ class Position(object):
         else:
             self.order.reduce_queue_ahead(volume)
 
-    def _step_limit_order(self, bid_price: np.float64, ask_price: np.float64, buy_volume: np.float64,
-                          sell_volume: np.float64, step: int) -> bool:
+    def _step_limit_order(self, bid_price: np.float32, ask_price: np.float32, buy_volume: np.float32,
+                          sell_volume: np.float32, step: int) -> bool:
         """
         Step in environment and update LIMIT order inventories.
 
@@ -128,7 +128,7 @@ class Position(object):
 
         return False
 
-    def _step_position_metrics(self, bid_price: np.float64, ask_price: np.float64, step: int) -> None:
+    def _step_position_metrics(self, bid_price: np.float32, ask_price: np.float32, step: int) -> None:
         """
         Step in environment and update position metrics.
 
@@ -146,8 +146,8 @@ class Position(object):
             for position in self.positions:
                 position.update_metrics(price=price, step=step)
 
-    def step(self, bid_price: np.float64, ask_price: np.float64, buy_volume: np.float64,
-             sell_volume: np.float64, step: int) -> bool:
+    def step(self, bid_price: np.float32, ask_price: np.float32, buy_volume: np.float32,
+             sell_volume: np.float32, step: int) -> bool:
         """
         Step in environment and update broker inventories.
 
@@ -270,7 +270,7 @@ class Position(object):
                 order.order_type
             ))
 
-    def remove(self, netting_order: MarketOrder or LimitOrder) -> np.float64:
+    def remove(self, netting_order: MarketOrder or LimitOrder) -> np.float32:
         """
         Remove position from inventory and return position PnL.
 
@@ -331,11 +331,11 @@ class Position(object):
         else:
             raise ValueError('Error. No {} pop_position to remove.'.format(self.side))
 
-    def get_unrealized_pnl(self, price: np.float64) -> np.float64:
+    def get_unrealized_pnl(self, price: np.float32) -> np.float32:
         """
         Unrealized PnL as a percentage gain.
 
-        :return: (np.float64) PnL percentage
+        :return: (np.float32) PnL percentage
         """
         if self.position_count == 0:
             return 0.0
@@ -350,12 +350,12 @@ class Position(object):
 
         return unrealized_pnl
 
-    def flatten_inventory(self, price: np.float64) -> np.float64:
+    def flatten_inventory(self, price: np.float32) -> np.float32:
         """
         Flatten all positions held in inventory.
 
-        :param price: (np.float64) current bid or ask price
-        :return: (np.float64) PnL from flattening inventory
+        :param price: (np.float32) current bid or ask price
+        :return: (np.float32) PnL from flattening inventory
         """
         LOGGER.debug(
             '{} is flattening inventory of {}'.format(self.side, self.position_count)
@@ -383,13 +383,13 @@ class Position(object):
 
         return pnl
 
-    def get_distance_to_midpoint(self, midpoint: np.float64) -> np.float64:
+    def get_distance_to_midpoint(self, midpoint: np.float32) -> np.float32:
         """
         Distance percentage between current midpoint price and the open
         order's posted price.
 
-        :param midpoint: (np.float64) current midpoint of crypto currency
-        :return: (np.float64) distance between open order and midpoint price
+        :param midpoint: (np.float32) current midpoint of crypto currency
+        :return: (np.float32) distance between open order and midpoint price
         """
         if self.order is None:
             return 0.

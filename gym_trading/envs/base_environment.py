@@ -154,7 +154,7 @@ class BaseEnvironment(Env, ABC):
         # typecast all data sets to numpy
         self._raw_data = self._raw_data.to_numpy(dtype=np.float32)
         self._normalized_data = self._normalized_data.to_numpy(dtype=np.float32)
-        self._midpoint_prices = self._midpoint_prices.to_numpy(dtype=np.float64)
+        self._midpoint_prices = self._midpoint_prices.to_numpy(dtype=np.float32)
         self._best_bids = self._best_bids.to_numpy(dtype=np.float32)
         self._best_asks = self._best_asks.to_numpy(dtype=np.float32)
 

@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 from keras.models import Sequential
 from keras.layers import Dense, Flatten, Conv2D, Layer
 from keras.optimizers import Adam
@@ -31,7 +32,7 @@ class GridMax(Layer):
                 sub_i += 1.0/i
         possible_dists = np.array(list(filterfalse(lambda x: sum(x) != 1.0, permutations(base, input_shape))))
         possible_dists = np.unique(possible_dists.round(decimals=5), axis=0)
-        self.dist_map = tf.constant(possible_dists, dtype=tf.float64)
+        self.dist_map = tf.constant(possible_dists, dtype=tf.float32)
 
     def call(self, inputs):
         def normap(x):

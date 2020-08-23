@@ -242,7 +242,7 @@ class DataPipeline(object):
             normalized_data = pd.concat((normalized_data, imbalance_data), axis=1)
 
         if as_pandas is False:
-            midpoint_prices = midpoint_prices.to_numpy(dtype=np.float64)
+            midpoint_prices = midpoint_prices.to_numpy(dtype=np.float32)
             data = data.to_numpy(dtype=np.float32)
             normalized_data = normalized_data.to_numpy(dtype=np.float32)
 
@@ -258,8 +258,9 @@ class DataPipeline(object):
         Midpoint gets log-normalized:
             log(price t) - log(price t-1)
 
-        :param fitting_file: prior trading day
-        :param testing_file: current trading day
+        :param exchanges: the list of exchanges between currencies in your portfolio (e.g. 'BTC-USD')
+        :param fitting_file_template: prior trading day (with '{}' in place of ccy)
+        :param testing_file: current trading day (with '{}' in place of ccy)
         :param include_imbalances: if TRUE, include LOB imbalances
         :param as_pandas: if TRUE, return data as DataFrame, otherwise np.array
         :return: (pd.DataFrame or np.array) scaled environment data
@@ -306,7 +307,7 @@ class DataPipeline(object):
         data_joined = data_joined.compute(scheduler='processes')
 
         if as_pandas is False:
-            midpoint_prices_joined = midpoint_prices_joined.to_numpy(dtype=np.float64)
+            midpoint_prices_joined = midpoint_prices_joined.to_numpy(dtype=np.float32)
             data_joined = data_joined.to_numpy(dtype=np.float32)
             normalized_data_joined = normalized_data_joined.to_numpy(dtype=np.float32)
 

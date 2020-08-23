@@ -1,8 +1,8 @@
 from typing import List, Dict, Union
 from gym_trading.utils.position import Position
-from numpy import float64
+from numpy import float32
 
-def generate_exchange_graph(exchanges: List[str]) -> Dict[str, Dict[str,  Dict[str, Union[str, float64]]]]:
+def generate_exchange_graph(exchanges: List[str]) -> Dict[str, Dict[str,  Dict[str, Union[str, float32]]]]:
     """
     Creates an undirected graph from list of exchanges. 
     Currencies and exchanges are represented as vertices and edges respectively.
@@ -72,8 +72,8 @@ def generate_exchange_graph(exchanges: List[str]) -> Dict[str, Dict[str,  Dict[s
                 idx = int(not bool(edge_ends.index(vertex)))
                 edges[edge_ends[idx]] = {
                     'ccy': edge,
-                    'ask': float64(0),
-                    'bid': float64(0),
+                    'ask': float32(0),
+                    'bid': float32(0),
                 }
         graph[vertex] = edges
     return graph

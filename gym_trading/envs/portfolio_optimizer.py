@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
 from collections import deque
 from typing import Union, Dict, List
+from itertools import filterfalse, permutations
 
 import numpy as np
 import pandas as pd
-from gym import Env
+from gym import Env, spaces
 
 import gym_trading.utils.reward as reward_types
 from configurations import (
@@ -20,6 +21,21 @@ from indicators import IndicatorManager, RSI, TnS
 VALID_REWARD_TYPES = [f for f in dir(reward_types) if '__' not in f]
 
 
+def gridmax(input_shape, level):
+    n_partitions = 2 ** level
+    base = [0.0]*(input_shape - 1)
+    for i in range(1, n_partitions+1):
+        if (not (i & (i-1) == 0)) and i != 1:
+            continue
+        base += [1.0/i]*i
+        sub_i = 1.0/i
+        while sub_i < 1.0:
+            base.append(1.0-sub_i)
+            sub_i += 1.0/i
+    possible_dists = np.array(list(filterfalse(lambda x: sum(x) != 1.0, permutations(base, input_shape))))
+    possible_dists = np.unique(possible_dists.round(decimals=5), axis=0)
+    return possible_dists
+
 class PortfolioOptimizer(Env):
     metadata = {'render.modes': ['human']}
 
@@ -27,17 +43,17 @@ class PortfolioOptimizer(Env):
                  fiat: str,
                  cryptos: List[str],
                  exchanges: List[str],
-                 initial_allocation: Dict[str, float],
-                 fitting_file: str,
-                 testing_file: str,
-                 max_position: int = 10,
+                 initial_inventory: Dict[str, np.float32],
+                 fitting_file_template: str,
+                 testing_file_template: str,
                  window_size: int = 100,
                  seed: int = 1,
                  action_repeats: int = 5,
+                 gridmax_level: int = 3,
                  training: bool = True,
                  format_3d: bool = False,
                  transaction_fee: bool = True,
-                 ema_alpha: list or float or None = EMA_ALPHA):
+                 ema_alpha: list or np.float32 or None = EMA_ALPHA):
         """
         Base class for creating environments extending OpenAI's GYM framework.
 
@@ -73,10 +89,16 @@ class PortfolioOptimizer(Env):
             store_historical_observations=True)
 
         # get Broker class to keep track of PnL and orders
-        self.broker = Broker(max_position=max_position, transaction_fee=transaction_fee)
+        self.broker = MetaBroker(
+            fiat=fiat,
+            cryptos=cryptos,
+            exchanges=exchanges,
+            transaction_fee=transaction_fee,
+            initial_inventory=initial_inventory
+        )
 
         # properties required for instantiation
-        self.symbol = symbol
+        self.exchanges = exchanges = sorted(exchanges)
         self.action_repeats = action_repeats
         self._seed = seed
         self._random_state = np.random.RandomState(seed=self._seed)
@@ -85,27 +107,24 @@ class PortfolioOptimizer(Env):
         self.window_size = window_size
         self.reward_type = 'distance_from_optimal_allocation'
         self.format_3d = format_3d  # e.g., [window, features, *NEW_AXIS*]
-        self.testing_file = testing_file
+        self.testing_file_template = testing_file_template
+
+        self.n_currencies = len(self.broker.portfolio.currencies)
 
         # properties that get reset()
-        self.reward = np.array([0.0], dtype=np.float32)
-        self.step_reward = np.array([0.0], dtype=np.float32)
+        self.reward = np.zeros(1, dtype=np.float32)
+        self.step_reward = np.zeros(1, dtype=np.float32)
         self.done = False
         self.local_step_number = 0
-        self.midpoint = 0.0
+        self.midpoint = np.float32(0.0)
         self.observation = None
-        self.action = 0
-        self.last_pnl = 0.
-        self.last_midpoint = None
-        self.midpoint_change = None
-        self.A_t, self.B_t = 0., 0.  # variables for Differential Sharpe Ratio
+        self.action = np.zeros(self.n_currencies, dtype=np.float32)
+        self.last_pnl = np.float32(0)
+        self.last_midpoints = None
+        self.midpoint_changes = None
         self.episode_stats = ExperimentStatistics()
-        self.best_bid = self.best_ask = None
-
-        # properties to override in sub-classes
-        self.actions = None
-        self.action_space = None
-        self.observation_space = None
+        self.best_bids = {ex: None for ex in exchanges}
+        self.best_asks = {ex: None for ex in exchanges}
 
         # get historical data for simulations
         self.data_pipeline = DataPipeline(alpha=ema_alpha)
@@ -116,36 +135,50 @@ class PortfolioOptimizer(Env):
         #   3) normalized_data - z-scored limit order book and order flow imbalance
         #       data, also midpoint price feature is replace by midpoint log price change
         self._midpoint_prices, self._raw_data, self._normalized_data = \
-            self.data_pipeline.load_environment_data(
-                fitting_file=fitting_file,
-                testing_file=testing_file,
+            self.data_pipeline.load_portfolio_environment_data(
+                exchanges=exchanges,
+                fitting_file_template=fitting_file_template,
+                testing_file_template=testing_file_template,
                 include_imbalances=True,
                 as_pandas=True,
             )
+
+        self._midpoint_prices_split = {ex: self._midpoint_prices.filter(regex=f'_{ex}') for ex in exchanges}
+        self._raw_data_split = {ex: self._raw_data.filter(regex=f'_{ex}') for ex in exchanges}
+        self._normalized_data_split = {ex: self._normalized_data.filter(regex=f'_{ex}') for ex in exchanges}
+    
         # derive best bid and offer
-        self._best_bids = self._raw_data['midpoint'] - (self._raw_data['spread'] / 2)
-        self._best_asks = self._raw_data['midpoint'] + (self._raw_data['spread'] / 2)
+        self._best_bids = {ex: self._raw_data[f'midpoint_{ex}'] - (self._raw_data[f'spread_{ex}'] / 2) 
+                           for ex in exchanges}
+        
+        self._best_asks = {ex: self._raw_data[f'midpoint_{ex}'] + (self._raw_data[f'spread_{ex}'] / 2) 
+                           for ex in exchanges}
 
         self.max_steps = self._raw_data.shape[0] - self.action_repeats - 1
 
         # load indicators into the indicator manager
-        self.tns = IndicatorManager()
-        self.rsi = IndicatorManager()
-        for window in INDICATOR_WINDOW:
-            self.tns.add(('tns_{}'.format(window), TnS(window=window, alpha=ema_alpha)))
-            self.rsi.add(('rsi_{}'.format(window), RSI(window=window, alpha=ema_alpha)))
+        self.tns = {}
+        self.rsi = {}
+        for ex in exchanges:
+            self.tns[ex] = IndicatorManager()
+            self.rsi[ex] = IndicatorManager()
+            for window in INDICATOR_WINDOW:
+                self.tns[ex].add(('tns_{}_{}'.format(ex, window), TnS(window=window, alpha=ema_alpha)))
+                self.rsi[ex].add(('rsi_{}_{}'.format(ex, window), RSI(window=window, alpha=ema_alpha)))
 
         # buffer for appending lags
         self.data_buffer = deque(maxlen=self.window_size)
 
         # Index of specific data points used to generate the observation space
         features = self._raw_data.columns.tolist()
-        self.best_bid_index = features.index('bids_distance_0')
-        self.best_ask_index = features.index('asks_distance_0')
-        self.notional_bid_index = features.index('bids_notional_0')
-        self.notional_ask_index = features.index('asks_notional_0')
-        self.buy_trade_index = features.index('buys')
-        self.sell_trade_index = features.index('sells')
+        self.indeces = {ex: {
+            'best_bid_index': features.index(f'bids_distance_0_{ex}'),
+            'best_ask_index': features.index(f'asks_distance_0_{ex}'),
+            'notional_bid_index': features.index(f'bids_notional_0_{ex}'),
+            'notional_ask_index': features.index(f'asks_notional_0_{ex}'),
+            'buy_trade_index': features.index(f'buys_{ex}'),
+            'sell_trade_index': features.index(f'sells_{ex}'),
+        } for ex in exchanges}
 
         self.viz.observation_labels = self._normalized_data.columns.tolist()
         self.viz.observation_labels += self.tns.get_labels() + self.rsi.get_labels()
@@ -154,41 +187,52 @@ class PortfolioOptimizer(Env):
         # typecast all data sets to numpy
         self._raw_data = self._raw_data.to_numpy(dtype=np.float32)
         self._normalized_data = self._normalized_data.to_numpy(dtype=np.float32)
-        self._midpoint_prices = self._midpoint_prices.to_numpy(dtype=np.float64)
-        self._best_bids = self._best_bids.to_numpy(dtype=np.float32)
-        self._best_asks = self._best_asks.to_numpy(dtype=np.float32)
+        self._midpoint_prices = self._midpoint_prices.to_numpy(dtype=np.float32)
+        self._best_bids = np.vstack(tuple(self._best_bids[ex].to_numpy(dtype=np.float32) for ex in exchanges)).T
+        self._best_asks = np.vstack(tuple(self._best_asks[ex].to_numpy(dtype=np.float32) for ex in exchanges)).T
 
         # rendering class
-        self._render = TradingGraph(sym=self.symbol)
+        self._render = {ex: TradingGraph(sym=ex) for ex in exchanges}
 
         # graph midpoint prices
-        self._render.reset_render_data(
-            y_vec=self._midpoint_prices[:np.shape(self._render.x_vec)[0]])
+        for i, ex in enumerate(exchanges):
+            self._render[ex].reset_render_data(
+                y_vec=self._midpoint_prices_split[ex][:np.shape(self._render[ex].x_vec)[0]])
 
-    @abstractmethod
-    def map_action_to_broker(self, action: int) -> (float, float):
+        # Set action and observation spaces
+        self.gridmax_level = gridmax_level
+        self.actions = gridmax(self.n_currencies, gridmax_level)
+        self.action_space = spaces.Discrete(len(self.actions))
+        # continuous: spaces.Box(low=0.0, high=1.0, shape=(self.n_currencies,), dtype=np.float32)
+        self.observation_space = None
+
+    def map_action_to_broker(self, action: int) -> (np.float32, np.float32):
         """
         Translate agent's action into an order and submit order to broker.
 
         :param action: (int) agent's action for current step
         :return: (tuple) reward, pnl
         """
+        target_allocation = self.actions[action]
+
+
+
         return 0., 0.
 
-    @abstractmethod
     def _create_position_features(self) -> np.ndarray:
         """
         Create agent space feature set reflecting the positions held in inventory.
 
         :return: (np.array) position features
         """
-        return np.array([np.nan], dtype=np.float32)
+        return np.array([self.broker.portfolio.allocation[c] 
+                         for c in self.broker.portfolio.currencies], dtype=np.float32)
 
     def _get_step_reward(self,
-                         step_pnl: float,
-                         step_penalty: float,
+                         step_pnl: np.float32,
+                         step_penalty: np.float32,
                          long_filled: bool,
-                         short_filled: bool) -> float:
+                         short_filled: bool) -> np.float32:
         """
         Calculate current step reward using a reward function.
 
@@ -377,13 +421,11 @@ class PortfolioOptimizer(Env):
         if self.broker.total_trade_count > 0 or self.broker.realized_pnl != 0.:
             self.episode_stats.number_of_episodes += 1
             print(('-' * 25), '{}-{} {} EPISODE RESET'.format(
-                self.symbol, self._seed, self.reward_type.upper()), ('-' * 25))
+                self.exchanges, self._seed, self.reward_type.upper()), ('-' * 25))
             print('Episode Reward: {:.4f}'.format(self.episode_stats.reward))
-            print('Episode PnL: {:.2f}%'.format(
-                (self.broker.realized_pnl / self.max_position) * 100.))
+            print('Episode PnL: {:.2f}%'.format(self.broker.pnl))
             print('Trade Count: {}'.format(self.broker.total_trade_count))
-            print('Average PnL per Trade: {:.4f}%'.format(
-                self.broker.average_trade_pnl * 100.))
+            print('Average PnL per Trade: {:.4f}%'.format(self.broker.pnl / self.broker.total_trade_count))
             print('Total # of episodes: {}'.format(self.episode_stats.number_of_episodes))
             print('\n'.join(['{}\t=\t{}'.format(k, v) for k, v in
                              self.broker.get_statistics().items()]))
@@ -393,35 +435,36 @@ class PortfolioOptimizer(Env):
             print('Resetting environment #{} on episode #{}.'.format(
                 self._seed, self.episode_stats.number_of_episodes))
 
-        self.A_t, self.B_t = 0., 0.
         self.reward = 0.0
         self.done = False
         self.broker.reset()
         self.data_buffer.clear()
         self.episode_stats.reset()
-        self.rsi.reset()
-        self.tns.reset()
+        for ex in self.exchanges:
+            self.rsi[ex].reset()
+            self.tns[ex].reset()
         self.viz.reset()
 
         for step in range(self.window_size + INDICATOR_WINDOW_MAX + 1):
-            self.midpoint = self._midpoint_prices[self.local_step_number]
+            self.midpoints = self._midpoint_prices[self.local_step_number]
 
-            if self.last_midpoint is None:
-                self.last_midpoint = self.midpoint
+            if self.last_midpoints is None:
+                self.last_midpoints = self.midpoint
 
-            self.midpoint_change = (self.midpoint / self.last_midpoint) - 1.
-            self.best_bid, self.best_ask = self._get_nbbo()
-            step_buy_volume = self._get_book_data(index=self.buy_trade_index)
-            step_sell_volume = self._get_book_data(index=self.sell_trade_index)
-            self.tns.step(buys=step_buy_volume, sells=step_sell_volume)
-            self.rsi.step(price=self.midpoint)
+            self.midpoint_change = (self.midpoints / self.last_midpoints) - 1.
+            self.best_bids, self.best_asks = self._get_nbbo()
+            for i, ex in enumerate(exchanges):
+                step_buy_volume = self._get_book_data(index=self.indeces[ex]['buy_trade_index'])
+                step_sell_volume = self._get_book_data(index=self.indeces[ex]['sell_trade_index'])
+                self.tns[ex].step(buys=step_buy_volume, sells=step_sell_volume)
+                self.rsi[ex].step(price=self.midpoints[i])
 
             # Add current step's observation to the data buffer
             step_observation = self._get_step_observation(step_action=0)
             self.data_buffer.append(step_observation)
 
             self.local_step_number += 1
-            self.last_midpoint = self.midpoint
+            self.last_midpoints = self.midpoints
 
         self.observation = self._get_observation()
 
@@ -462,17 +505,20 @@ class PortfolioOptimizer(Env):
         self._seed = seed
         return [seed]
 
-    def _get_nbbo(self) -> (float, float):
+    def _get_nbbo(self) -> (np.float32, np.float32):
         """
         Get best bid and offer.
 
         :return: (tuple) best bid and offer
         """
-        best_bid = self._best_bids[self.local_step_number]
-        best_ask = self._best_asks[self.local_step_number]
-        return best_bid, best_ask
+        best_bids = {}
+        best_asks = {}
+        for i, ex in enumerate(self.exchanges):
+            best_bids[ex] = self._best_bids[self.local_step_number][i]
+            best_asks[ex] = self._best_asks[self.local_step_number][i]
+        return best_bids, best_asks
 
-    def _get_book_data(self, index: int = 0) -> np.ndarray or float:
+    def _get_book_data(self, index: int = 0) -> np.ndarray or np.float32:
         """
         Return step 'n' of order book snapshot data.
 
@@ -506,8 +552,8 @@ class PortfolioOptimizer(Env):
 
         :return: (np.array) Indicator values for current time step
         """
-        return np.array((*self.tns.get_value(),
-                         *self.rsi.get_value()),
+        return np.array((*list(map(lambda x: x.get_value(), [self.tns[ex] for ex in self.exchanges])),
+                         *list(map(lambda x: x.get_value(), [self.rsi[ex] for ex in self.exchanges]))),
                         dtype=np.float32).reshape(1, -1)
 
     def _get_step_observation(self, step_action: int = 0) -> np.ndarray:

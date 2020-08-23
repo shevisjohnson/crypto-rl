@@ -151,7 +151,7 @@ def trade_completion(step_pnl: float, market_order_fee: float,
 
     return reward
 
-def distance_from_optimal_allocation(allocation: np.ndarray, optimal_allocation: np.ndarray) -> np.float64:
+def distance_from_optimal_allocation(allocation: np.ndarray, optimal_allocation: np.ndarray) -> np.float32:
     """
     Calculate the euclidean distance between the current and optimal allocations for 
     a given timestep. Return value is scaled to between -1 and 1 (closer = higher)
@@ -167,4 +167,4 @@ def distance_from_optimal_allocation(allocation: np.ndarray, optimal_allocation:
     :return: reward - element of (-1.0, 1.0)
     """
     r2 = np.sqrt(2)
-    return np.float64(2 * ((r2 - np.linalg.norm(allocation-optimal_allocation) / r2) - 0.5))
+    return np.float32(2 * ((r2 - np.linalg.norm(allocation-optimal_allocation) / r2) - 0.5))
