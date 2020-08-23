@@ -1,6 +1,7 @@
 matplotlib
 scikit-learn
 arctic==1.74.0
+dask==2.23.0
 gym==0.12.1
 h5py==2.9.0
 more-itertools==6.0.0

@@ -1,8 +1,11 @@
 import os
 from datetime import datetime as dt
 
+from typing import List
 import numpy as np
 import pandas as pd
+import dask.dataframe as dd
+from multiprocessing import cpu_count
 from sklearn.preprocessing import StandardScaler
 
 from configurations import DATA_PATH, EMA_ALPHA, LOGGER, MAX_BOOK_ROWS, TIMEZONE
@@ -45,6 +48,10 @@ class DataPipeline(object):
             LOGGER.warn('Error: file must be a csv or xz')
             data = None
 
+        dataindex = pd.to_datetime(data.index)
+        dataindex.freq = 'S'
+        dataindex = dataindex.floor('S')
+        data.index = dataindex
         elapsed = (dt.now(tz=TIMEZONE) - start_time).seconds
         LOGGER.info('Imported %s from a csv in %i seconds' % (filename[-25:], elapsed))
         return data
@@ -240,3 +247,67 @@ class DataPipeline(object):
             normalized_data = normalized_data.to_numpy(dtype=np.float32)
 
         return midpoint_prices, data, normalized_data
+
+    def load_portfolio_environment_data(self, exchanges: List[str],
+                                        fitting_file_template: str, testing_file_template: str,
+                                        include_imbalances: bool = True, as_pandas: bool = False) \
+            -> (pd.DataFrame, pd.DataFrame, pd.DataFrame):
+        """
+        Import and scale environment data set with prior day's data.
+
+        Midpoint gets log-normalized:
+            log(price t) - log(price t-1)
+
+        :param fitting_file: prior trading day
+        :param testing_file: current trading day
+        :param include_imbalances: if TRUE, include LOB imbalances
+        :param as_pandas: if TRUE, return data as DataFrame, otherwise np.array
+        :return: (pd.DataFrame or np.array) scaled environment data
+        """
+        data_by_type = {
+            'midpoint_prices': {},
+            'data': {},
+            'normalized_data': {},
+        }
+        npartitions = cpu_count()
+        for ex in exchanges:
+            fitting_file = fitting_file_template.format(ex)
+            testing_file = testing_file_template.format(ex)
+            
+            midpoint_prices, data, normalized_data = self.load_environment_data(fitting_file=fitting_file,
+                                                                                testing_file=testing_file,
+                                                                                include_imbalances=include_imbalances,
+                                                                                as_pandas=True)
+            
+            data_by_type['midpoint_prices'][ex] = dd.from_pandas(midpoint_prices.add_suffix(f'_{ex}'), npartitions=npartitions)
+            data_by_type['data'][ex] = dd.from_pandas(data.add_suffix(f'_{ex}'), npartitions=npartitions)
+            data_by_type['normalized_data'][ex] = dd.from_pandas(normalized_data.add_suffix(f'_{ex}'), npartitions=npartitions)
+
+        midpoint_prices_joined = data_by_type['midpoint_prices'][exchanges[0]]
+        data_joined = data_by_type['data'][exchanges[0]]
+        normalized_data_joined = data_by_type['normalized_data'][exchanges[0]]
+
+        for ex in exchanges[1:]:
+            normalized_data_joined = midpoint_prices_joined.join(
+                data_by_type['midpoint_prices'][ex],
+                how='inner'
+            )
+            data_joined = data_joined.join(
+                data_by_type['data'][ex],
+                how='inner'
+            )
+            normalized_data_joined = normalized_data_joined.join(
+                data_by_type['normalized_data'][ex],
+                how='inner'
+            )
+
+        midpoint_prices_joined = midpoint_prices_joined.compute(scheduler='processes')
+        normalized_data_joined = normalized_data_joined.compute(scheduler='processes')
+        data_joined = data_joined.compute(scheduler='processes')
+
+        if as_pandas is False:
+            midpoint_prices_joined = midpoint_prices_joined.to_numpy(dtype=np.float64)
+            data_joined = data_joined.to_numpy(dtype=np.float32)
+            normalized_data_joined = normalized_data_joined.to_numpy(dtype=np.float32)
+
+        return midpoint_prices_joined, data_joined, normalized_data_joined
