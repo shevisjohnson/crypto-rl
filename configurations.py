@@ -32,7 +32,7 @@ INCLUDE_ORDERFLOW = True
 # ./data_recorder/database/database.py
 BATCH_SIZE = 100000
 RECORD_DATA = False
-MONGO_ENDPOINT = 'localhost'
+MONGO_ENDPOINT = '10.0.0.34'
 ARCTIC_NAME = 'arctic_crypto.tickstore'
 TIMEZONE = tz.utc
 
@@ -52,6 +52,7 @@ CRYPTOS = [
     'XLM',
     'LINK',
 ]
+CURRENCIES = CRYPTOS + [FIAT]
 EXCHANGES = [
     # fiat exchanges
     'BTC-USD',
@@ -65,6 +66,13 @@ EXCHANGES = [
 ]
 INITIAL_ALLOCATION = {
     'USD': np.float32(1),
+    'BTC': np.float32(0),
+    'ETH': np.float32(0),
+    'XLM': np.float32(0),
+    'LINK': np.float32(0),
+}
+INITIAL_INVENTORY = {
+    'USD': np.float32(10000),
     'BTC': np.float32(0),
     'ETH': np.float32(0),
     'XLM': np.float32(0),

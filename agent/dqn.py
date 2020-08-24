@@ -7,31 +7,34 @@ from rl.agents.dqn import DQNAgent
 from rl.memory import SequentialMemory
 from rl.callbacks import FileLogger, ModelIntervalCheckpoint
 #from keras.callbacks import TensorBoard
-from configurations import LOGGER
+from configurations import LOGGER, CURRENCIES
 from itertools import filterfalse, permutations
 import os
 import gym
 import gym_trading
 from datetime import datetime
 
+def gridmax(input_shape, level):
+    n_partitions = 2 ** level
+    base = [0.0]*(input_shape - 1)
+    for i in range(1, n_partitions+1):
+        if (not (i & (i-1) == 0)) and i != 1:
+            continue
+        base += [1.0/i]*i
+        sub_i = 1.0/i
+        while sub_i < 1.0:
+            base.append(1.0-sub_i)
+            sub_i += 1.0/i
+    possible_dists = np.array(list(filterfalse(lambda x: sum(x) != 1.0, permutations(base, input_shape))))
+    possible_dists = np.unique(possible_dists.round(decimals=5), axis=0)
+    return possible_dists
 
 class GridMax(Layer):
     def __init__(self, input_shape, level=0):
         super(Layer, self).__init__()
         self.level = level
         self.n_partitions = n_partitions = 2 ** level
-        
-        base = [0.0]*(input_shape - 1)
-        for i in range(1, n_partitions+1):
-            if (not (i & (i-1) == 0)) and i != 1:
-                continue
-            base += [1.0/i]*i
-            sub_i = 1.0/i
-            while sub_i < 1.0:
-                base.append(1.0-sub_i)
-                sub_i += 1.0/i
-        possible_dists = np.array(list(filterfalse(lambda x: sum(x) != 1.0, permutations(base, input_shape))))
-        possible_dists = np.unique(possible_dists.round(decimals=5), axis=0)
+        possible_dists = gridmax(input_shape, level)
         self.dist_map = tf.constant(possible_dists, dtype=tf.float32)
 
     def call(self, inputs):
@@ -44,7 +47,7 @@ class Agent(object):
     name = 'DQN'
 
     def __init__(self, number_of_training_steps=1e5, gamma=0.999, load_weights=False,
-                 visualize=False, dueling_network=True, double_dqn=True, nn_type='mlp',
+                 visualize=False, dueling_network=True, double_dqn=True, nn_type='cnn',
                  **kwargs):
         """
         Agent constructor
@@ -103,7 +106,7 @@ class Agent(object):
                               gamma=gamma,
                               target_model_update=1000,
                               delta_clip=1.0)
-        self.agent.compile(Adam(lr=float("3e-4")), metrics=['mae'])
+        self.agent.compile(Adam(lr=np.float64("3e-4")), metrics=['mae'])
 
     def __str__(self):
         # msg = '\n'
@@ -134,7 +137,9 @@ class Agent(object):
         model = Sequential()
         conv = Conv2D
         model.add(conv(input_shape=features_shape,
-                       filters=5, kernel_size=[10, 1], padding='same', activation='relu',
+                       filters=5, kernel_size=[20, 1], padding='same', activation='relu',
+                       strides=[8, 1], data_format='channels_first'))
+        model.add(conv(filters=5, kernel_size=[10, 1], padding='same', activation='relu',
                        strides=[5, 1], data_format='channels_first'))
         model.add(conv(filters=5, kernel_size=[5, 1], padding='same', activation='relu',
                        strides=[2, 1], data_format='channels_first'))
@@ -142,8 +147,8 @@ class Agent(object):
                        strides=[2, 1], data_format='channels_first'))
         model.add(Flatten())
         model.add(Dense(256, activation='relu'))
-        model.add(Dense(self.env.action_space.n, activation='softmax'))
-        #model.add(GridMax(self.env.action_space.n), 0)
+        model.add(Dense(self.env.action_space.shape[0], activation='softmax'))
+        model.add(GridMax(self.env.action_space.shape[0]), 0)
         LOGGER.info(model.summary())
         return model
 

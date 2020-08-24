@@ -37,7 +37,11 @@ class Database(object):
         """
         LOGGER.info("init_db_connection for {}...".format(self.sym))
         try:
-            self.db = Arctic(MONGO_ENDPOINT)
+            self.db = Arctic(MONGO_ENDPOINT,
+                             username=getenv('MONGO_USERNAME'),
+                             password=getenv('MONGO_PASSWORD'),
+                             authSource='admin',
+                             authMechanism='SCRAM-SHA-256')
             self.db.initialize_library(ARCTIC_NAME, lib_type=TICK_STORE)
             self.collection = self.db[ARCTIC_NAME]
         except PyMongoError as e:

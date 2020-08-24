@@ -62,8 +62,8 @@ def test_extract_features() -> None:
         # for ccy, ccy2 in [('LTC-USD', 'tLTCUSD')]:
         query = {
             'ccy': [ccy],  # ccy2],  # parameter must be a list
-            'start_date': 20200809,  # parameter format for dates
-            'end_date': 20200811,  # parameter format for dates
+            'start_date': 20200813,  # parameter format for dates
+            'end_date': 20200823,  # parameter format for dates
         }
         sim.extract_features(query)
 

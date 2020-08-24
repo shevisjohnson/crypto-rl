@@ -208,14 +208,14 @@ class PortfolioOptimizer(Env):
         # Set action and observation spaces
         self.gridmax_level = gridmax_level
         self.actions = gridmax(self.n_currencies, gridmax_level)
-        self.action_space = spaces.Discrete(len(self.actions))
+        self.action_space = spaces.Box(low=0.0, high=1.0, shape=(self.n_currencies,), dtype=np.float32)
         # continuous: spaces.Box(low=0.0, high=1.0, shape=(self.n_currencies,), dtype=np.float32)
         self.reset()
         self.observation_space = spaces.Box(low=-10., high=10.,
                                             shape=self.observation.shape,
                                             dtype=np.float32)
 
-    def map_action_to_broker(self, action: int) -> (np.float32, np.float32):
+    def map_action_to_broker(self, action: np.ndarray) -> (np.float32, np.float32):
         """
         Translate agent's action into an order and submit order to broker.
 
@@ -223,7 +223,7 @@ class PortfolioOptimizer(Env):
         :param step_bid_ask_prices: The updated bid and ask prices for the current step
         :return: (tuple) reward, pnl
         """
-        target_allocation = self.actions[action]
+        target_allocation = action
 
         step_reward = self._get_step_reward(target_allocation, self.step_bid_ask_prices)
 
@@ -264,7 +264,7 @@ class PortfolioOptimizer(Env):
 
         return reward
 
-    def step(self, action: int = 0) -> (np.ndarray, np.ndarray, bool, dict):
+    def step(self, action: np.ndarray = 0) -> (np.ndarray, np.ndarray, bool, dict):
         """
         Step through environment with action.
 
@@ -283,7 +283,7 @@ class PortfolioOptimizer(Env):
             # reset the reward if there ARE action repeats
             if current_step == 0:
                 self.reward = 0.
-                step_action = self.actions[action]
+                step_action = action
             else:
                 step_action = allocation_array
 
@@ -345,7 +345,7 @@ class PortfolioOptimizer(Env):
 
             flatten_pnl = self.broker.cash_out()
             self.reward += np.float32(1)
-            
+
             # store for visualization after the episode
             self.viz.add(self.broker.portfolio.total_value,  # arguments map to the column names in _init_
                          self.broker.portfolio.allocation,
@@ -545,7 +545,7 @@ class PortfolioOptimizer(Env):
         notional_pnl_delta = self.broker.portfolio.pnl - self.broker.portfolio.prior_pnl
         return np.array([realized_pnl_delta, notional_pnl_delta], dtype=np.float32)
 
-    def _get_step_observation(self, step_action: int = 0) -> np.ndarray:
+    def _get_step_observation(self) -> np.ndarray:
         """
         Current step observation, NOT including historical data.
 
