@@ -224,6 +224,12 @@ class MetaBroker(object):
         # Reached maximum number of trades
         return False
 
+    def cash_out(self) -> np.float32:
+        target_allocation = {c: np.float32(0) for c in self.portfolio.cryptos}
+        target_allocation[self.portfolio.fiat] = np.float32(1)
+        self.reallocate(target_allocation=target_allocation)
+        return self.realized_pnl
+
     def get_statistics(self) -> dict:
         """
         Get statistics for long and short inventories.

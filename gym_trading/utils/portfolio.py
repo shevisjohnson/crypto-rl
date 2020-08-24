@@ -41,9 +41,12 @@ class Portfolio(object):
             self._initialize_inventory(initial_inventory)
         if initial_bid_prices:
             self._initialize_bid_prices(initial_bid_prices)
+        # Not fully initialized by reset
         self.initial_total_value = self.total_value
         self.initial_realized_value = self.realized_value
-
+        self.prior_total_value = self.total_value
+        self.prior_allocation = self.allocation
+    
     def reset(self) -> None:
         """
         Reset portfolio metrics / inventories.
@@ -57,6 +60,11 @@ class Portfolio(object):
         self.inventory = {c: np.float32(0) for c in self.currencies}
         self.bid_prices = {c: np.float32(0) for c in self.cryptos}
         self.bid_prices[self.fiat] = np.float32(1)
+        self.prior_pnl = self.pnl
+        self.prior_realized_pnl = self.realized_pnl
+        self.prior_total_value = self.total_value
+        self.prior_total_trade_count = self.total_trade_count
+        self.prior_allocation = self.allocation
 
     def initialize(self, bid_prices: Dict[str, np.float32], inventory: Dict[str, np.float32] = {}) -> None:
         """
@@ -176,6 +184,11 @@ class Portfolio(object):
         :param bid_prices: dictionary of the best bid price on each fiat exchange
         :return: (void)
         """
+        self.prior_pnl = self.pnl
+        self.prior_realized_pnl = self.realized_pnl
+        self.prior_total_value = self.total_value
+        self.prior_total_trade_count = self.total_trade_count
+        self.prior_allocation = self.allocation
         self._validate_bid_prices(bid_prices)
         self.bid_prices.update(bid_prices)
         self.bid_prices[self.fiat] = np.float32(1)

@@ -7,7 +7,9 @@ import numpy as np
 import pandas as pd
 from gym import Env, spaces
 
-import gym_trading.utils.reward as reward_types
+from copy import deepcopy
+
+from gym_trading.utils.reward import distance_from_optimal_allocation
 from configurations import (
     EMA_ALPHA, INDICATOR_WINDOW, INDICATOR_WINDOW_MAX, MARKET_ORDER_FEE,
 )
@@ -17,8 +19,6 @@ from gym_trading.utils.plot_history import Visualize
 from gym_trading.utils.render_env import TradingGraph
 from gym_trading.utils.statistic import ExperimentStatistics
 from indicators import IndicatorManager, RSI, TnS
-
-VALID_REWARD_TYPES = [f for f in dir(reward_types) if '__' not in f]
 
 
 def gridmax(input_shape, level):
@@ -85,8 +85,9 @@ class PortfolioOptimizer(Env):
         """
 
         self.viz = Visualize(
-            columns=['midpoint', 'buys', 'sells', 'inventory', 'realized_pnl'],
-            store_historical_observations=True)
+            columns=['total_value', 'allocation', 'pnl', 'realized_pnl'],
+            store_historical_observations=True
+        )
 
         # get Broker class to keep track of PnL and orders
         self.broker = MetaBroker(
@@ -96,6 +97,8 @@ class PortfolioOptimizer(Env):
             transaction_fee=transaction_fee,
             initial_inventory=initial_inventory
         )
+
+        self.initial_inventory = initial_inventory
 
         # properties required for instantiation
         self.exchanges = exchanges = sorted(exchanges)
@@ -125,6 +128,7 @@ class PortfolioOptimizer(Env):
         self.episode_stats = ExperimentStatistics()
         self.best_bids = {ex: None for ex in exchanges}
         self.best_asks = {ex: None for ex in exchanges}
+        self.step_bid_ask_prices = {}
 
         # get historical data for simulations
         self.data_pipeline = DataPipeline(alpha=ema_alpha)
@@ -180,9 +184,11 @@ class PortfolioOptimizer(Env):
             'sell_trade_index': features.index(f'sells_{ex}'),
         } for ex in exchanges}
 
-        self.viz.observation_labels = self._normalized_data.columns.tolist()
-        self.viz.observation_labels += self.tns.get_labels() + self.rsi.get_labels()
-        self.viz.observation_labels += ['Inventory Count', 'Realized PNL', 'Unrealized PNL']
+        self.viz.observation_labels = self._normalized_data.columns.tolist() # normalized stationary L.O.B features
+        self.viz.observation_labels += [self.tns[ex].get_labels() + self.rsi[ex].get_labels() for ex in exchanges] # indicators
+        self.viz.observation_labels += list(map(lambda x: f'prior_%_{x}', self.broker.portfolio.currencies)) # prior allocation
+        self.viz.observation_labels += list(map(lambda x: f'target_%_{x}', self.broker.portfolio.currencies)) # target allocation
+        self.viz.observation_labels += ['Realized PNL', 'Notional PNL', 'Reward'] # performance statistics
 
         # typecast all data sets to numpy
         self._raw_data = self._raw_data.to_numpy(dtype=np.float32)
@@ -204,100 +210,57 @@ class PortfolioOptimizer(Env):
         self.actions = gridmax(self.n_currencies, gridmax_level)
         self.action_space = spaces.Discrete(len(self.actions))
         # continuous: spaces.Box(low=0.0, high=1.0, shape=(self.n_currencies,), dtype=np.float32)
-        self.observation_space = None
+        self.reset()
+        self.observation_space = spaces.Box(low=-10., high=10.,
+                                            shape=self.observation.shape,
+                                            dtype=np.float32)
 
     def map_action_to_broker(self, action: int) -> (np.float32, np.float32):
         """
         Translate agent's action into an order and submit order to broker.
 
         :param action: (int) agent's action for current step
+        :param step_bid_ask_prices: The updated bid and ask prices for the current step
         :return: (tuple) reward, pnl
         """
         target_allocation = self.actions[action]
 
+        step_reward = self._get_step_reward(target_allocation, self.step_bid_ask_prices)
 
+        target_allocation_dict = {c: target_allocation[i] 
+                                  for i, c in enumerate(self.broker.portfolio.currencies)}
 
-        return 0., 0.
+        self.broker.reallocate(target_allocation=target_allocation_dict)
+        self.broker.step(self.step_bid_ask_prices)
 
-    def _create_position_features(self) -> np.ndarray:
-        """
-        Create agent space feature set reflecting the positions held in inventory.
+        pnl = np.float32((self.broker.portfolio.total_value / self.broker.portfolio.prior_total_value) - 1.0)
 
-        :return: (np.array) position features
-        """
-        return np.array([self.broker.portfolio.allocation[c] 
-                         for c in self.broker.portfolio.currencies], dtype=np.float32)
+        return step_reward, pnl
 
     def _get_step_reward(self,
-                         step_pnl: np.float32,
-                         step_penalty: np.float32,
-                         long_filled: bool,
-                         short_filled: bool) -> np.float32:
+                         target_allocation: np.ndarray,
+                         step_bid_ask_prices: Dict[str, Dict[str, np.float32]]) -> np.float32:
         """
-        Calculate current step reward using a reward function.
+        Calculate current step reward using the optimal allocation reward function.
 
-        :param step_pnl: PnL realized from an open position that's been closed in the
-        current time step
-        :param step_penalty: Penalty signal for agent to discourage erroneous actions
-        :param long_filled: TRUE if open long limit order was filled in current time step
-        :param short_filled: TRUE if open short limit order was filled in current time
-        step
-        :return: reward for current time step
+        :param prior_allocation: allocation prior to action
+        :param target_allocation: action made by the agent
+        :param step_bid_ask_prices: The updated bid and ask prices for the current step
         """
         reward = 0.
 
-        if self.reward_type == 'default':
-            reward += reward_types.default(
-                inventory_count=self.broker.net_inventory_count,
-                midpoint_change=self.midpoint_change
-            ) * 100. + step_penalty
+        possible_brokers = np.array([deepcopy(self.broker) for _ in range(self.actions.shape[0])])
+        Q_step = np.zeros((self.actions.shape[0],), dtype=np.float32)
 
-        elif self.reward_type == 'default_with_fills':
-            reward += reward_types.default_with_fills(
-                inventory_count=self.broker.net_inventory_count,
-                midpoint_change=self.midpoint_change,
-                step_pnl=step_pnl
-            ) * 100. + step_penalty
+        for i, a in enumerate(self.actions):
+            action = {c: a[j] for j, c in enumerate(self.broker.portfolio.currencies)}
+            possible_brokers[i].reallocate(action)
+            possible_brokers[i].step(step_bid_ask_prices)
+            Q_step[i] = possible_brokers[i].pnl
 
-        elif self.reward_type == 'asymmetrical':
-            reward += reward_types.asymmetrical(
-                inventory_count=self.broker.net_inventory_count,
-                midpoint_change=self.midpoint_change,
-                half_spread_pct=(self.midpoint / self.best_bid) - 1.,
-                long_filled=long_filled,
-                short_filled=short_filled,
-                step_pnl=step_pnl,
-                dampening=0.6
-            ) * 100. + step_penalty
+        optimal_action_index = np.argmax(Q_step)
 
-        elif self.reward_type == 'realized_pnl':
-            current_pnl = self.broker.realized_pnl
-            reward += reward_types.realized_pnl(
-                current_pnl=current_pnl,
-                last_pnl=self.last_pnl
-            ) * 100. + step_penalty
-            self.last_pnl = current_pnl
-
-        elif self.reward_type == 'differential_sharpe_ratio':
-            tmp_reward, self.A_t, self.B_t = reward_types.differential_sharpe_ratio(
-                R_t=self.midpoint_change * self.broker.net_inventory_count,
-                A_tm1=self.A_t,
-                B_tm1=self.B_t
-            )
-            reward += tmp_reward + step_penalty
-
-        elif self.reward_type == 'trade_completion':
-            reward += reward_types.trade_completion(
-                step_pnl=step_pnl,
-                market_order_fee=MARKET_ORDER_FEE,
-                profit_ratio=2.
-            ) + step_penalty
-
-        else:  # Default implementation
-            reward += reward_types.default(
-                inventory_count=self.broker.net_inventory_count,
-                midpoint_change=self.midpoint_change
-            ) * 100. + step_penalty
+        reward = distance_from_optimal_allocation(target_allocation, self.actions[optimal_action_index])
 
         return reward
 
@@ -314,53 +277,48 @@ class PortfolioOptimizer(Env):
                 self.reset()
                 return self.observation, self.reward, self.done
 
+            allocation_array = np.array([self.broker.portfolio.allocation[c]
+                                         for c in self.broker.portfolio.currencies], dtype=np.float32)
+
             # reset the reward if there ARE action repeats
             if current_step == 0:
                 self.reward = 0.
-                step_action = action
+                step_action = self.actions[action]
             else:
-                step_action = 0
+                step_action = allocation_array
 
             # Get current step's midpoint and change in midpoint price percentage
-            self.midpoint = self._midpoint_prices[self.local_step_number]
+            self.midpoints = self._midpoint_prices[self.local_step_number]
             self.midpoint_change = (self.midpoint / self.last_midpoint) - 1.
 
             # Pass current time step bid/ask prices to broker to calculate PnL,
             # or if any open orders are to be filled
-            self.best_bid, self.best_ask = self._get_nbbo()
+            self.best_bids, self.best_asks = self._get_nbbo()
 
             # verify the data integrity
-            assert self.best_bid <= self.best_ask, (
+            assert all([self.best_bids[ex] <= self.best_asks[ex]
+                        for ex in self.broker.portfolio.exchanges]), (
                 "Error: best bid is more expensive than the best Ask:"
                 "\nBid = {}\nAsk = {}").format(self.best_bid, self.best_ask)
 
-            # get buy and sell trade volume to use by indicators and 'broker' to
-            # execute any open orders the agent has
-            buy_volume = self._get_book_data(index=self.buy_trade_index)
-            sell_volume = self._get_book_data(index=self.sell_trade_index)
+            self.step_bid_ask_prices = {}
+            for i, ex in enumerate(exchanges):
+                # get buy and sell trade volume to use by indicators and 'broker' to
+                # execute any open orders the agent has
+                step_buy_volume = self._get_book_data(index=self.indeces[ex]['buy_trade_index'])
+                step_sell_volume = self._get_book_data(index=self.indeces[ex]['sell_trade_index'])
+                # Update indicators
+                self.tns[ex].step(buys=step_buy_volume, sells=step_sell_volume)
+                self.rsi[ex].step(price=self.midpoints[i])
+                self.step_bid_ask_prices[ex] = {'bid': self.best_bids[ex],
+                                          'ask': self.best_asks[ex]}
 
-            # Update indicators
-            self.tns.step(buys=buy_volume, sells=sell_volume)
-            self.rsi.step(price=self.midpoint)
-
-            # Get PnL from any filled LIMIT orders, which is calculated by netting out
-            # whatever open position the agent already has in FIFO order
-            limit_pnl, long_filled, short_filled = self.broker.step_limit_order_pnl(
-                bid_price=self.best_bid,
-                ask_price=self.best_ask,
-                buy_volume=buy_volume,
-                sell_volume=sell_volume,
-                step=self.local_step_number
-            )
 
             # Get PnL from any filled MARKET orders AND action penalties for invalid
             # actions made by the agent for future discouragement
-            action_penalty_reward, market_pnl = self.map_action_to_broker(action=step_action)
-            step_pnl = limit_pnl + market_pnl
-            self.step_reward = self._get_step_reward(step_pnl=step_pnl,
-                                                     step_penalty=action_penalty_reward,
-                                                     long_filled=long_filled,
-                                                     short_filled=short_filled)
+            action_penalty_reward, step_pnl = self.map_action_to_broker(action=step_action)
+
+            self.step_reward = action_penalty_reward
 
             # Add current step's observation to the data buffer
             step_observation = self._get_step_observation(step_action=step_action)
@@ -368,15 +326,14 @@ class PortfolioOptimizer(Env):
 
             # Store for visualization AFTER the episode
             self.viz.add_observation(obs=step_observation)
-            self.viz.add(self.midpoint,  # arguments map to the column names in _init_
-                         int(long_filled),
-                         int(short_filled),
-                         self.broker.net_inventory_count,
-                         (self.broker.realized_pnl * 100) / self.max_position)
+            self.viz.add(self.broker.portfolio.total_value,  # arguments map to the column names in _init_
+                         self.broker.portfolio.allocation,
+                         self.broker.portfolio.pnl,
+                         self.broker.portfolio.realized_pnl)
 
             self.reward += self.step_reward
             self.local_step_number += 1
-            self.last_midpoint = self.midpoint
+            self.last_midpoints = self.midpoints
 
         self.observation = self._get_observation()
 
@@ -386,19 +343,14 @@ class PortfolioOptimizer(Env):
             had_long_positions = 1 if self.broker.long_inventory_count > 0 else 0
             had_short_positions = 1 if self.broker.short_inventory_count > 0 else 0
 
-            flatten_pnl = self.broker.flatten_inventory(bid_price=self.best_bid,
-                                                        ask_price=self.best_ask)
-            self.reward += self._get_step_reward(step_pnl=flatten_pnl,
-                                                 step_penalty=0.,
-                                                 long_filled=False,
-                                                 short_filled=False)
-
+            flatten_pnl = self.broker.cash_out()
+            self.reward += np.float32(1)
+            
             # store for visualization after the episode
-            self.viz.add(self.midpoint,  # arguments map to the column names in _init_
-                         had_long_positions,
-                         had_short_positions,
-                         self.broker.net_inventory_count,
-                         (self.broker.realized_pnl * 100) / self.max_position)
+            self.viz.add(self.broker.portfolio.total_value,  # arguments map to the column names in _init_
+                         self.broker.portfolio.allocation,
+                         self.broker.portfolio.pnl,
+                         self.broker.portfolio.realized_pnl)
 
         # save rewards to derive cumulative reward
         self.episode_stats.reward += self.reward
@@ -437,12 +389,20 @@ class PortfolioOptimizer(Env):
 
         self.reward = 0.0
         self.done = False
-        self.broker.reset()
         self.data_buffer.clear()
         self.episode_stats.reset()
-        for ex in self.exchanges:
+
+        initial_bid_ask_prices = {}
+
+        for i, ex in enumerate(self.exchanges):
             self.rsi[ex].reset()
             self.tns[ex].reset()
+            initial_bid_ask_prices[ex] = {'bid': self._best_bids[self.local_step_number][i],
+                                          'ask': self._best_asks[self.local_step_number][i]}
+
+        self.broker.reset()
+        self.broker.initialize(initial_bid_ask_prices, self.initial_inventory)
+        
         self.viz.reset()
 
         for step in range(self.window_size + INDICATOR_WINDOW_MAX + 1):
@@ -453,11 +413,21 @@ class PortfolioOptimizer(Env):
 
             self.midpoint_change = (self.midpoints / self.last_midpoints) - 1.
             self.best_bids, self.best_asks = self._get_nbbo()
+            self.step_bid_ask_prices = {}
             for i, ex in enumerate(exchanges):
                 step_buy_volume = self._get_book_data(index=self.indeces[ex]['buy_trade_index'])
                 step_sell_volume = self._get_book_data(index=self.indeces[ex]['sell_trade_index'])
                 self.tns[ex].step(buys=step_buy_volume, sells=step_sell_volume)
                 self.rsi[ex].step(price=self.midpoints[i])
+                self.step_bid_ask_prices[ex] = {'bid': self.best_bids[ex],
+                                          'ask': self.best_asks[ex]}
+
+            allocation_array = np.array([self.broker.portfolio.allocation[c]
+                                         for c in self.broker.portfolio.currencies], dtype=np.float32)
+
+            self.step_reward = self._get_step_reward(allocation_array, self.step_bid_ask_prices)
+
+            self.broker.step(self.step_bid_ask_prices)
 
             # Add current step's observation to the data buffer
             step_observation = self._get_step_observation(step_action=0)
@@ -537,14 +507,24 @@ class PortfolioOptimizer(Env):
         """
         return np.clip(observation, -10., 10.)
 
-    def _create_action_features(self, action: int) -> np.ndarray:
+    def _create_prior_allocation_features(self) -> np.ndarray:
+        """
+        Create agent space feature set reflecting the positions held in inventory.
+
+        :return: (np.array) position features
+        """
+        return np.array([self.broker.portfolio.prior_allocation[c] 
+                         for c in self.broker.portfolio.currencies], dtype=np.float32)
+
+    def  _create_target_allocation_features(self) -> np.ndarray:
         """
         Create a features array for the current time step's action.
 
         :param action: (int) action number
         :return: (np.array) One-hot of current action
         """
-        return self.actions[action]
+        return np.array([self.broker.portfolio.allocation[c] 
+                         for c in self.broker.portfolio.currencies], dtype=np.float32)
 
     def _create_indicator_features(self) -> np.ndarray:
         """
@@ -552,9 +532,18 @@ class PortfolioOptimizer(Env):
 
         :return: (np.array) Indicator values for current time step
         """
-        return np.array((*list(map(lambda x: x.get_value(), [self.tns[ex] for ex in self.exchanges])),
-                         *list(map(lambda x: x.get_value(), [self.rsi[ex] for ex in self.exchanges]))),
-                        dtype=np.float32).reshape(1, -1)
+        return np.array([[self.tns[ex].get_value()] + [self.rsi[ex].get_value()]
+                         for ex in exchanges], dtype=np.float32).reshape(1, -1).flatten()
+
+    def _create_step_pnl_features(self) -> np.ndarray:
+        """
+        Create features vector with portfolio step PNL stats.
+
+        :return: (np.array) Indicator values for current time step
+        """
+        realized_pnl_delta = self.broker.portfolio.realized_pnl - self.broker.portfolio.prior_realized_pnl
+        notional_pnl_delta = self.broker.portfolio.pnl - self.broker.portfolio.prior_pnl
+        return np.array([realized_pnl_delta, notional_pnl_delta], dtype=np.float32)
 
     def _get_step_observation(self, step_action: int = 0) -> np.ndarray:
         """
@@ -565,12 +554,14 @@ class PortfolioOptimizer(Env):
         """
         step_environment_observation = self._normalized_data[self.local_step_number]
         step_indicator_features = self._create_indicator_features()
-        step_position_features = self._create_position_features()
-        step_action_features = self._create_action_features(action=step_action)
+        step_prior_allocation_features = self._create_prior_allocation_features()
+        step_target_allocation_features = self._create_target_allocation_features()
+        step_pnl_features = self._create_step_pnl_features()
         observation = np.concatenate((step_environment_observation,
                                       step_indicator_features,
-                                      step_position_features,
-                                      step_action_features,
+                                      step_prior_allocation_features,
+                                      step_target_allocation_features,
+                                      step_pnl_features,
                                       self.step_reward),
                                      axis=None)
         return self._process_data(observation)
