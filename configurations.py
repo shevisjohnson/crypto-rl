@@ -32,7 +32,7 @@ INCLUDE_ORDERFLOW = True
 # ./data_recorder/database/database.py
 BATCH_SIZE = 100000
 RECORD_DATA = False
-MONGO_ENDPOINT = '10.0.0.34'
+MONGO_ENDPOINT = 'localhost'
 ARCTIC_NAME = 'arctic_crypto.tickstore'
 TIMEZONE = tz.utc
 
@@ -55,9 +55,9 @@ CRYPTOS = [
 CURRENCIES = CRYPTOS + [FIAT]
 EXCHANGES = [
     # fiat exchanges
-    'BTC-USD',
+    #'BTC-USD',
     'ETH-USD',
-    'LINK-USD',
+    #'LINK-USD',
     'XLM-USD',
     # crypto exchanges
     'ETH-BTC',

@@ -1,6 +1,6 @@
 from datetime import datetime as dt
 
-from configurations import TIMEZONE, BASKET
+from configurations import TIMEZONE, BASKET, EXCHANGES
 from data_recorder.database.simulator import Simulator
 
 
@@ -58,14 +58,34 @@ def test_extract_features() -> None:
 
     sim = Simulator()
 
-    for ccy in BASKET:
+    dates = [
+#        20200811,
+#        20200812,
+#        20200813,
+#        20200814,
+#        20200815,
+        20200816,
+        20200817,
+        20200818,
+        20200819,
+        20200820,
+        20200821,
+        20200822,
+#        20200823,
+#        20200824,
+    ]
+
+    
         # for ccy, ccy2 in [('LTC-USD', 'tLTCUSD')]:
-        query = {
-            'ccy': [ccy],  # ccy2],  # parameter must be a list
-            'start_date': 20200813,  # parameter format for dates
-            'end_date': 20200823,  # parameter format for dates
-        }
-        sim.extract_features(query)
+    for i, d in enumerate(dates[1:-1]):
+        j = i + 2
+        for ccy in EXCHANGES:
+            query = {
+                'ccy': [ccy],  # ccy2],  # parameter must be a list
+                'start_date': dates[i],  # parameter format for dates
+                'end_date': dates[j],  # parameter format for dates
+            }
+            sim.extract_features(query, d)
 
     elapsed = (dt.now(tz=TIMEZONE) - start_time).seconds
     print('Completed %s in %i seconds' % (__name__, elapsed))

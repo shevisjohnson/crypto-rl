@@ -106,8 +106,9 @@ class Database(object):
                         (cursor.shape[0], ccy, elapsed))
 
         except Exception as ex:
-            cursor = None
             LOGGER.warn('Simulator._query_arctic() thew an exception: \n%s' % str(ex))
+            #breakpoint()
+            cursor = None
 
         return cursor
 

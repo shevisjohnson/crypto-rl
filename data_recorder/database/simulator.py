@@ -1,9 +1,9 @@
 import os
 from datetime import datetime as dt
-from datetime import timedelta
+from datetime import timedelta, date as dtd
 from typing import Type, Union
 import json
-
+from pprint import pformat
 
 import numpy as np
 import pandas as pd
@@ -153,15 +153,14 @@ class Simulator(object):
         #tick_history.fillna(value={'side': ''}, inplace=True)
         #tick_history = tick_history.infer_objects()
 
-        tick_history.info()
-
         #if isinstance(tick_history.index, pd.DatetimeIndex):
         #    tick_history.index = tick_history.index.strftime("%Y-%m-%dT%H:%M:%S.%f")
-
 
         if tick_history is None:
             LOGGER.warn("Query returned no data: {}".format(query))
             return None
+
+        tick_history.info()
 
         loop_length = tick_history.shape[0]
 
@@ -289,7 +288,7 @@ class Simulator(object):
 
         return orderbook_snapshot_history
 
-    def extract_features(self, query: dict) -> None:
+    def extract_features(self, query: dict, date: int) -> None:
         """
         Create and export limit order book data to csv. This function
         exports multiple days of data and ensures each day starts and
@@ -300,15 +299,26 @@ class Simulator(object):
         """
         start_time = dt.now(tz=TIMEZONE)
 
+        datestr = str(date)
+        date = dtd.fromisoformat(f'{datestr[:4]}-{datestr[4:6]}-{datestr[6:]}')
+
         order_book_data = self.get_orderbook_snapshot_history(query=query)
-        if order_book_data is not None:
+        if order_book_data is None:
+            LOGGER.info(f"No data found for\n{pformat(query)}")
+        else:
             dates = order_book_data['system_time'].dt.date.unique()
             LOGGER.info('dates: {}'.format(dates))
-            for date in dates[:]:
-                # for date in dates[1:]:
+            if date in dates:
                 tmp = order_book_data.loc[order_book_data['system_time'].dt.date == date]
                 self.export_to_csv(
                     tmp, filename='{}_{}'.format(query['ccy'][0], date), compress=True)
+            else:
+                LOGGER.info(f'date {date} not found in dates')
+            #for date in dates[:]:
+            #    # for date in dates[1:]:
+            #    tmp = order_book_data.loc[order_book_data['system_time'].dt.date == date]
+            #    self.export_to_csv(
+            #        tmp, filename='{}_{}'.format(query['ccy'][0], date), compress=True)
 
         elapsed = (dt.now(tz=TIMEZONE) - start_time).seconds
         LOGGER.info('***\nSimulator.extract_features() executed in %i seconds\n***'
