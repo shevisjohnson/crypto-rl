@@ -45,6 +45,7 @@ LIMIT_ORDER_FEE = np.float32(0)
 SLIPPAGE = np.float32(0.0005)
 
 # ./gym_trading/utils/meta_broker.py
+GRIDMAX_LEVEL = 3
 FIAT = 'USD'
 CRYPTOS = [
     'BTC',
@@ -55,9 +56,9 @@ CRYPTOS = [
 CURRENCIES = CRYPTOS + [FIAT]
 EXCHANGES = [
     # fiat exchanges
-    #'BTC-USD',
+    'BTC-USD',
     'ETH-USD',
-    #'LINK-USD',
+    'LINK-USD',
     'XLM-USD',
     # crypto exchanges
     'ETH-BTC',
@@ -78,7 +79,7 @@ INITIAL_INVENTORY = {
     'XLM': np.float32(0),
     'LINK': np.float32(0),
 }
-MAX_TRADES_PER_ACTION = 10
+MAX_TRADES_PER_ACTION = 2
 ALLOCATION_TOLERANCE = np.float32(0.001)
 # will try to get within ALLOCATION_TOLERANCE of target
 # allocation using no more than MAX_TRADES_PER_ACTION orders
@@ -90,7 +91,7 @@ INDICATOR_WINDOW_FEATURES = [f'_{i}' for i in [5, 15]]  # Create labels
 EMA_ALPHA = 0.99  # [0.9, 0.99, 0.999, 0.9999]
 
 # agent penalty configs
-ENCOURAGEMENT = 0.000000000001
+ENCOURAGEMENT = np.float32(0.000001)
 
 # Data Directory
 ROOT_PATH = os.path.dirname(os.path.realpath(__file__))

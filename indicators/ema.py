@@ -92,7 +92,11 @@ def apply_ema_all_data(
     if isinstance(ema, ExponentialMovingAverage):
         LOGGER.info("Applying EMA to data...")
         for row in data.values:
-            ema.step(value=row)
+            try:
+                ema.step(value=row)
+            except Exception as e:
+                breakpoint()
+                raise e
             smoothed_data.append(ema.value)
         smoothed_data = np.asarray(smoothed_data, dtype=np.float32)
         return pd.DataFrame(smoothed_data, columns=labels, index=data.index)

@@ -1,42 +1,48 @@
 import argparse
 from typing import Union, Dict, List
 from agent.dqn import Agent
-from configurations import LOGGER, FIAT
+from configurations import LOGGER, FIAT, GRIDMAX_LEVEL
 from configurations import CRYPTOS, EXCHANGES, INITIAL_ALLOCATION, INITIAL_INVENTORY
 from numpy import float32
 from copy import deepcopy
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--id',
+                    default='Portfolio-Optimizer-v0',
+                    help="Environment ID; 'Portfolio-Optimizer-v0'",
+                    type=str)
 parser.add_argument('--window_size',
                     default=100,
                     help="Number of lags to include in the observation",
                     type=int)
-parser.add_argument('--initial_inventory',
-                    default=INITIAL_INVENTORY,
-                    help="Maximum number of positions that are " +
-                         "able to be held in a broker's inventory",
-                    type=int)
 parser.add_argument('--fitting_file_template',
-                    default='demo_{}_2020-08-09.csv.xz',
+                    default='{}_2020-08-17.csv.xz',
                     help="Data set for fitting the z-score scaler (previous day)",
                     type=str)
 parser.add_argument('--testing_file_template',
-                    default='demo_{}_2020-08-10.csv.xz',
+                    default='{}_2020-08-18.csv.xz',
                     help="Data set for training the agent (current day)",
                     type=str)
 parser.add_argument('--fiat',
                     default=FIAT,
-                    help="Name of currency pair or instrument",
+                    help="Symbol of fiat currency (e.g. 'USD')",
                     type=str)
 parser.add_argument('--cryptos',
                     default=CRYPTOS,
-                    help="Name of currency pair or instrument",
-                    type=str) 
+                    help="Symbol list of cryptocurrencies (e.g. ['BTC', 'ETH'])",
+                    type=List[str])
+parser.add_argument('--exchanges',
+                    default=EXCHANGES,
+                    help="List of currency exchanges (e.g. ['BTC-USD', 'ETH-USD', 'ETH-BTC'])",
+                    type=List[str]) 
 parser.add_argument('--initial_inventory',
                     default=INITIAL_INVENTORY,
-                    help="Name of currency pair or instrument",
+                    help="Dictionary mapping currencies to amounts.",
                     type=Dict[str, float32])
-
+parser.add_argument('--gridmax_level',
+                    default=GRIDMAX_LEVEL,
+                    help="Gridmax level, where n partitions = 2^(level)",
+                    type=bool)
 parser.add_argument('--number_of_training_steps',
                     default=1e5,
                     help="Number of steps to train the agent "

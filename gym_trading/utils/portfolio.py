@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 import numpy as np
 from copy import copy
 
-from configurations import LOGGER, SLIPPAGE, MARKET_ORDER_FEE
+from configurations import LOGGER, SLIPPAGE, MARKET_ORDER_FEE, ALLOCATION_TOLERANCE
 from gym_trading.utils.order import MarketOrder
 from gym_trading.utils.statistic import PortfolioStatistics
 
@@ -101,6 +101,17 @@ class Portfolio(object):
         }
 
     @property
+    def value_breakdown_arr(self) -> np.ndarray:
+        """
+        Returns a numpy array of each currency mapped to it's 
+        current value in fiat currency.
+
+        :return: (np.ndarray) portfolio value breakdown indexed on currency list
+        """
+        return np.array([self.inventory[c] * self.bid_prices[c]
+                         for c in self.currencies], dtype=np.float32)
+
+    @property
     def unrealized_value(self) -> np.float32:
         """
         calculates the value of cryptos in portfolio by fiat currency
@@ -135,6 +146,19 @@ class Portfolio(object):
         if self.total_value <= np.float32(0):
             return {c: np.float32(0) for c in self.currencies}
         return {c: np.float32(v / self.total_value) for c, v in self.value_breakdown.items()}
+
+    @property
+    def allocation_arr(self) -> np.ndarray:
+        """
+        The fractional breakdown of currencies by fiat value
+
+        :return: (np.ndarray) portfolio allocation, indexed by self.currencies 
+            assert sum(allocation) == np.float32(1)
+        """
+        if self.total_value <= np.float32(0):
+            return np.zeros(len(self.currencies), dtype=np.float32)
+        vb = self.value_breakdown
+        return np.array([np.float32(vb[c] / self.total_value) for c in self.currencies], dtype=np.float32)
 
     @property
     def total_trade_count(self) -> int:
@@ -211,9 +235,9 @@ class Portfolio(object):
 
         # Create a hypothetical average execution price incorporating a fixed slippage
         if buying_asset:
-            order.average_execution_price = order.price * (np.float32(1) + SLIPPAGE)
+            order.average_execution_price = order.price # * (np.float32(1) + SLIPPAGE)
         else:
-            order.average_execution_price = order.price * (np.float32(1) - SLIPPAGE)
+            order.average_execution_price = order.price # * (np.float32(1) - SLIPPAGE)
 
         # Determine impact of order on inventory
         # ingress is where value is going
@@ -232,7 +256,11 @@ class Portfolio(object):
                       else np.float32(1)
         egress_amount = order.size * egress_price
 
+        if np.isclose(self.inventory[egress_sym], egress_amount):
+            egress_amount = self.inventory[egress_sym] * 0.999999999999
+
         if self.inventory[egress_sym] < egress_amount:
+            breakpoint()
             LOGGER.info(f"Invalid order, too large.")
             LOGGER.info(dict(ccy=order.ccy, 
                              cost=egress_amount,

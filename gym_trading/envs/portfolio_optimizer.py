@@ -6,37 +6,27 @@ from itertools import filterfalse, permutations
 import numpy as np
 import pandas as pd
 from gym import Env, spaces
-
+from joblib import Parallel, parallel_backend, delayed
 from copy import deepcopy
+from tqdm import tqdm
 
-from gym_trading.utils.reward import distance_from_optimal_allocation
+from gym_trading.utils.reward import distance_from_optimal_allocation, differential_sharpe_ratio
 from configurations import (
-    EMA_ALPHA, INDICATOR_WINDOW, INDICATOR_WINDOW_MAX, MARKET_ORDER_FEE,
+    EMA_ALPHA, INDICATOR_WINDOW, INDICATOR_WINDOW_MAX, MARKET_ORDER_FEE, GRIDMAX_LEVEL, LOGGER
 )
 from gym_trading.utils.meta_broker import MetaBroker
 from gym_trading.utils.data_pipeline import DataPipeline
 from gym_trading.utils.plot_history import Visualize
-from gym_trading.utils.render_env import TradingGraph
+from gym_trading.utils.render_env import PortfolioGraph
+from gym_trading.utils.penalty_lookup_table import PenaltyLookupTable
 from gym_trading.utils.statistic import ExperimentStatistics
+from gym_trading.utils.gridmax import gridmax
 from indicators import IndicatorManager, RSI, TnS
 
 
-def gridmax(input_shape, level):
-    n_partitions = 2 ** level
-    base = [0.0]*(input_shape - 1)
-    for i in range(1, n_partitions+1):
-        if (not (i & (i-1) == 0)) and i != 1:
-            continue
-        base += [1.0/i]*i
-        sub_i = 1.0/i
-        while sub_i < 1.0:
-            base.append(1.0-sub_i)
-            sub_i += 1.0/i
-    possible_dists = np.array(list(filterfalse(lambda x: sum(x) != 1.0, permutations(base, input_shape))))
-    possible_dists = np.unique(possible_dists.round(decimals=5), axis=0)
-    return possible_dists
-
 class PortfolioOptimizer(Env):
+    id = 'Portfolio-Optimizer-v0'
+    description = "Environment where portfolio allocations are used to create market orders."
     metadata = {'render.modes': ['human']}
 
     def __init__(self,
@@ -49,7 +39,7 @@ class PortfolioOptimizer(Env):
                  window_size: int = 100,
                  seed: int = 1,
                  action_repeats: int = 5,
-                 gridmax_level: int = 3,
+                 gridmax_level: int = GRIDMAX_LEVEL,
                  training: bool = True,
                  format_3d: bool = False,
                  transaction_fee: bool = True,
@@ -84,6 +74,8 @@ class PortfolioOptimizer(Env):
             raw values are returned in place of smoothed values
         """
 
+        exchanges = sorted(exchanges)
+
         self.viz = Visualize(
             columns=['total_value', 'allocation', 'pnl', 'realized_pnl'],
             store_historical_observations=True
@@ -101,12 +93,10 @@ class PortfolioOptimizer(Env):
         self.initial_inventory = initial_inventory
 
         # properties required for instantiation
-        self.exchanges = exchanges = sorted(exchanges)
         self.action_repeats = action_repeats
         self._seed = seed
         self._random_state = np.random.RandomState(seed=self._seed)
         self.training = training
-        self.max_position = max_position
         self.window_size = window_size
         self.reward_type = 'distance_from_optimal_allocation'
         self.format_3d = format_3d  # e.g., [window, features, *NEW_AXIS*]
@@ -115,11 +105,13 @@ class PortfolioOptimizer(Env):
         self.n_currencies = len(self.broker.portfolio.currencies)
 
         # properties that get reset()
-        self.reward = np.zeros(1, dtype=np.float32)
+        self.reward = np.float32(0.)
         self.step_reward = np.zeros(1, dtype=np.float32)
+        self.A_t = np.zeros(self.n_currencies, dtype=np.float32)
+        self.B_t = np.zeros(self.n_currencies, dtype=np.float32)
         self.done = False
         self.local_step_number = 0
-        self.midpoint = np.float32(0.0)
+        self.midpoints = np.zeros(len(exchanges), dtype=np.float32)
         self.observation = None
         self.action = np.zeros(self.n_currencies, dtype=np.float32)
         self.last_pnl = np.float32(0)
@@ -147,9 +139,9 @@ class PortfolioOptimizer(Env):
                 as_pandas=True,
             )
 
-        self._midpoint_prices_split = {ex: self._midpoint_prices.filter(regex=f'_{ex}') for ex in exchanges}
-        self._raw_data_split = {ex: self._raw_data.filter(regex=f'_{ex}') for ex in exchanges}
-        self._normalized_data_split = {ex: self._normalized_data.filter(regex=f'_{ex}') for ex in exchanges}
+        self._midpoint_prices_split = {ex: self._midpoint_prices.filter(regex=f'_{ex}').to_numpy(dtype=np.float32) for ex in exchanges}
+        self._raw_data_split = {ex: self._raw_data.filter(regex=f'_{ex}').to_numpy(dtype=np.float32) for ex in exchanges}
+        self._normalized_data_split = {ex: self._normalized_data.filter(regex=f'_{ex}').to_numpy(dtype=np.float32) for ex in exchanges}
     
         # derive best bid and offer
         self._best_bids = {ex: self._raw_data[f'midpoint_{ex}'] - (self._raw_data[f'spread_{ex}'] / 2) 
@@ -198,17 +190,20 @@ class PortfolioOptimizer(Env):
         self._best_asks = np.vstack(tuple(self._best_asks[ex].to_numpy(dtype=np.float32) for ex in exchanges)).T
 
         # rendering class
-        self._render = {ex: TradingGraph(sym=ex) for ex in exchanges}
+        self._render = PortfolioGraph(sym=ex)
+
+        initial_values = np.array([self.broker.portfolio.total_value] * np.shape(self._render.x_vec)[0])
 
         # graph midpoint prices
-        for i, ex in enumerate(exchanges):
-            self._render[ex].reset_render_data(
-                y_vec=self._midpoint_prices_split[ex][:np.shape(self._render[ex].x_vec)[0]])
+        self._render.reset_render_data(
+            y_vec=initial_values)
 
         # Set action and observation spaces
         self.gridmax_level = gridmax_level
         self.actions = gridmax(self.n_currencies, gridmax_level)
-        self.action_space = spaces.Box(low=0.0, high=1.0, shape=(self.n_currencies,), dtype=np.float32)
+        self.plt = PenaltyLookupTable(self.actions)
+        self.plt.warm_up()
+        self.action_space = spaces.Discrete(len(self.actions))
         # continuous: spaces.Box(low=0.0, high=1.0, shape=(self.n_currencies,), dtype=np.float32)
         self.reset()
         self.observation_space = spaces.Box(low=-10., high=10.,
@@ -219,18 +214,15 @@ class PortfolioOptimizer(Env):
         """
         Translate agent's action into an order and submit order to broker.
 
-        :param action: (int) agent's action for current step
+        :param action: (np.ndarray) agent's target allocation for current step
         :param step_bid_ask_prices: The updated bid and ask prices for the current step
         :return: (tuple) reward, pnl
         """
         target_allocation = action
 
-        step_reward = self._get_step_reward(target_allocation, self.step_bid_ask_prices)
+        step_reward = self._get_step_reward(target_allocation)
 
-        target_allocation_dict = {c: target_allocation[i] 
-                                  for i, c in enumerate(self.broker.portfolio.currencies)}
-
-        self.broker.reallocate(target_allocation=target_allocation_dict)
+        self.broker.reallocate(target_allocation=target_allocation)
         self.broker.step(self.step_bid_ask_prices)
 
         pnl = np.float32((self.broker.portfolio.total_value / self.broker.portfolio.prior_total_value) - 1.0)
@@ -238,8 +230,7 @@ class PortfolioOptimizer(Env):
         return step_reward, pnl
 
     def _get_step_reward(self,
-                         target_allocation: np.ndarray,
-                         step_bid_ask_prices: Dict[str, Dict[str, np.float32]]) -> np.float32:
+                         target_allocation: np.ndarray) -> np.float32:
         """
         Calculate current step reward using the optimal allocation reward function.
 
@@ -247,24 +238,35 @@ class PortfolioOptimizer(Env):
         :param target_allocation: action made by the agent
         :param step_bid_ask_prices: The updated bid and ask prices for the current step
         """
-        reward = 0.
+        reward = np.float32(0.)
 
-        possible_brokers = np.array([deepcopy(self.broker) for _ in range(self.actions.shape[0])])
-        Q_step = np.zeros((self.actions.shape[0],), dtype=np.float32)
+        prior_allocation = self.broker.portfolio.allocation_arr
 
-        for i, a in enumerate(self.actions):
-            action = {c: a[j] for j, c in enumerate(self.broker.portfolio.currencies)}
-            possible_brokers[i].reallocate(action)
-            possible_brokers[i].step(step_bid_ask_prices)
-            Q_step[i] = possible_brokers[i].pnl
+        #penalty_table_idx = self.plt.get_table_idx_for_allocation(prior_allocation)
 
-        optimal_action_index = np.argmax(Q_step)
+        #reward = np.float32(0)
 
-        reward = distance_from_optimal_allocation(target_allocation, self.actions[optimal_action_index])
+        for i in range(1, self.n_currencies):
+            ex_sym = f'{self.broker.currencies[i]}-{self.broker.fiat}'
+            ex_idx = self.broker.exchanges.index(ex_sym)
+            tr, self.A_t[i], self.B_t[i] = differential_sharpe_ratio(
+                R_t=self.self.midpoint_changes[ex_idx] * self.broker.portfolio.inventory[self.broker.currencies[i]],
+                A_tm1=self.A_t[i],
+                B_tm1=self.B_t[i]
+            )
+            reward += tr
 
-        return reward
+        step_penalty = self.plt.get_penalty_for_action(prior_allocation, target_allocation)
 
-    def step(self, action: np.ndarray = 0) -> (np.ndarray, np.ndarray, bool, dict):
+        #allocation_deltas = target_allocation * price_deltas_table * penalty
+
+        #pnl = np.sum(allocation_deltas) - np.float32(1)
+
+        #return np.tanh(pnl * np.float32(100))
+
+        return reward + step_penalty
+
+    def step(self, action: int = 0) -> (np.ndarray, np.float32, bool, dict):
         """
         Step through environment with action.
 
@@ -277,19 +279,18 @@ class PortfolioOptimizer(Env):
                 self.reset()
                 return self.observation, self.reward, self.done
 
-            allocation_array = np.array([self.broker.portfolio.allocation[c]
-                                         for c in self.broker.portfolio.currencies], dtype=np.float32)
+            allocation_array = self.broker.portfolio.allocation_arr
 
             # reset the reward if there ARE action repeats
             if current_step == 0:
-                self.reward = 0.
-                step_action = action
+                self.reward = np.float32(0.)
+                step_action = self.actions[action]
             else:
                 step_action = allocation_array
 
             # Get current step's midpoint and change in midpoint price percentage
             self.midpoints = self._midpoint_prices[self.local_step_number]
-            self.midpoint_change = (self.midpoint / self.last_midpoint) - 1.
+            self.midpoint_changes = (self.midpoints / (self.last_midpoints + np.finfo(np.float32).eps))
 
             # Pass current time step bid/ask prices to broker to calculate PnL,
             # or if any open orders are to be filled
@@ -297,12 +298,12 @@ class PortfolioOptimizer(Env):
 
             # verify the data integrity
             assert all([self.best_bids[ex] <= self.best_asks[ex]
-                        for ex in self.broker.portfolio.exchanges]), (
+                        for ex in self.broker.exchanges]), (
                 "Error: best bid is more expensive than the best Ask:"
                 "\nBid = {}\nAsk = {}").format(self.best_bid, self.best_ask)
 
             self.step_bid_ask_prices = {}
-            for i, ex in enumerate(exchanges):
+            for i, ex in enumerate(self.broker.exchanges):
                 # get buy and sell trade volume to use by indicators and 'broker' to
                 # execute any open orders the agent has
                 step_buy_volume = self._get_book_data(index=self.indeces[ex]['buy_trade_index'])
@@ -321,7 +322,7 @@ class PortfolioOptimizer(Env):
             self.step_reward = action_penalty_reward
 
             # Add current step's observation to the data buffer
-            step_observation = self._get_step_observation(step_action=step_action)
+            step_observation = self._get_step_observation()
             self.data_buffer.append(step_observation)
 
             # Store for visualization AFTER the episode
@@ -340,17 +341,23 @@ class PortfolioOptimizer(Env):
         if self.local_step_number > self.max_steps:
             self.done = True
 
-            had_long_positions = 1 if self.broker.long_inventory_count > 0 else 0
-            had_short_positions = 1 if self.broker.short_inventory_count > 0 else 0
-
             flatten_pnl = self.broker.cash_out()
-            self.reward += np.float32(1)
+            self.reward += self.broker.pnl
 
             # store for visualization after the episode
             self.viz.add(self.broker.portfolio.total_value,  # arguments map to the column names in _init_
                          self.broker.portfolio.allocation,
                          self.broker.portfolio.pnl,
                          self.broker.portfolio.realized_pnl)
+        elif self.broker.portfolio.total_value < (0.5 * self.broker.portfolio.initial_total_value):
+            self.done = True
+            self.reward += self.broker.pnl
+            # store for visualization after the episode
+            self.viz.add(self.broker.portfolio.total_value,  # arguments map to the column names in _init_
+                         self.broker.portfolio.allocation,
+                         self.broker.portfolio.pnl,
+                         self.broker.portfolio.realized_pnl)
+
 
         # save rewards to derive cumulative reward
         self.episode_stats.reward += self.reward
@@ -373,7 +380,7 @@ class PortfolioOptimizer(Env):
         if self.broker.total_trade_count > 0 or self.broker.realized_pnl != 0.:
             self.episode_stats.number_of_episodes += 1
             print(('-' * 25), '{}-{} {} EPISODE RESET'.format(
-                self.exchanges, self._seed, self.reward_type.upper()), ('-' * 25))
+                self.broker.exchanges, self._seed, self.reward_type.upper()), ('-' * 25))
             print('Episode Reward: {:.4f}'.format(self.episode_stats.reward))
             print('Episode PnL: {:.2f}%'.format(self.broker.pnl))
             print('Trade Count: {}'.format(self.broker.total_trade_count))
@@ -387,14 +394,16 @@ class PortfolioOptimizer(Env):
             print('Resetting environment #{} on episode #{}.'.format(
                 self._seed, self.episode_stats.number_of_episodes))
 
-        self.reward = 0.0
+        self.reward = np.float32(0.)
+        self.A_t = np.zeros(self.n_currencies, dtype=np.float32)
+        self.B_t = np.zeros(self.n_currencies, dtype=np.float32)
         self.done = False
         self.data_buffer.clear()
         self.episode_stats.reset()
 
         initial_bid_ask_prices = {}
 
-        for i, ex in enumerate(self.exchanges):
+        for i, ex in enumerate(self.broker.exchanges):
             self.rsi[ex].reset()
             self.tns[ex].reset()
             initial_bid_ask_prices[ex] = {'bid': self._best_bids[self.local_step_number][i],
@@ -405,16 +414,16 @@ class PortfolioOptimizer(Env):
         
         self.viz.reset()
 
-        for step in range(self.window_size + INDICATOR_WINDOW_MAX + 1):
+        for step in tqdm(range(self.window_size + INDICATOR_WINDOW_MAX + 1)):
             self.midpoints = self._midpoint_prices[self.local_step_number]
 
             if self.last_midpoints is None:
-                self.last_midpoints = self.midpoint
+                self.last_midpoints = self.midpoints
 
-            self.midpoint_change = (self.midpoints / self.last_midpoints) - 1.
+            self.midpoint_changes = (self.midpoints / (self.last_midpoints + np.finfo(np.float32).eps))
             self.best_bids, self.best_asks = self._get_nbbo()
             self.step_bid_ask_prices = {}
-            for i, ex in enumerate(exchanges):
+            for i, ex in enumerate(self.broker.exchanges):
                 step_buy_volume = self._get_book_data(index=self.indeces[ex]['buy_trade_index'])
                 step_sell_volume = self._get_book_data(index=self.indeces[ex]['sell_trade_index'])
                 self.tns[ex].step(buys=step_buy_volume, sells=step_sell_volume)
@@ -422,21 +431,17 @@ class PortfolioOptimizer(Env):
                 self.step_bid_ask_prices[ex] = {'bid': self.best_bids[ex],
                                           'ask': self.best_asks[ex]}
 
-            allocation_array = np.array([self.broker.portfolio.allocation[c]
-                                         for c in self.broker.portfolio.currencies], dtype=np.float32)
-
-            self.step_reward = self._get_step_reward(allocation_array, self.step_bid_ask_prices)
-
+            self.step_reward = self._get_step_reward(self.broker.portfolio.allocation_arr)
             self.broker.step(self.step_bid_ask_prices)
-
             # Add current step's observation to the data buffer
-            step_observation = self._get_step_observation(step_action=0)
+            step_observation = self._get_step_observation()
             self.data_buffer.append(step_observation)
-
             self.local_step_number += 1
             self.last_midpoints = self.midpoints
 
         self.observation = self._get_observation()
+
+        print('Environment reset complete')
 
         return self.observation
 
@@ -447,7 +452,10 @@ class PortfolioOptimizer(Env):
         :param mode: (str) flag for type of rendering. Only 'human' supported.
         :return: (void)
         """
-        self._render.render(midpoint=self.midpoint, mode=mode)
+        self._render.render(total_value=self.broker.portfolio.total_value,
+                            trade_count=self.broker.portfolio.total_trade_count,
+                            allocation=self.broker.allocation,
+                            mode=mode)
 
     def close(self) -> None:
         """
@@ -455,6 +463,7 @@ class PortfolioOptimizer(Env):
 
         :return: (void)
         """
+        self.plt.cool_down()
         self.broker.reset()
         self.data_buffer.clear()
         self.episode_stats = None
@@ -483,7 +492,7 @@ class PortfolioOptimizer(Env):
         """
         best_bids = {}
         best_asks = {}
-        for i, ex in enumerate(self.exchanges):
+        for i, ex in enumerate(self.broker.exchanges):
             best_bids[ex] = self._best_bids[self.local_step_number][i]
             best_asks[ex] = self._best_asks[self.local_step_number][i]
         return best_bids, best_asks
@@ -533,7 +542,7 @@ class PortfolioOptimizer(Env):
         :return: (np.array) Indicator values for current time step
         """
         return np.array([[self.tns[ex].get_value()] + [self.rsi[ex].get_value()]
-                         for ex in exchanges], dtype=np.float32).reshape(1, -1).flatten()
+                         for ex in self.broker.exchanges], dtype=np.float32).reshape(1, -1).flatten()
 
     def _create_step_pnl_features(self) -> np.ndarray:
         """
@@ -562,7 +571,7 @@ class PortfolioOptimizer(Env):
                                       step_prior_allocation_features,
                                       step_target_allocation_features,
                                       step_pnl_features,
-                                      self.step_reward),
+                                      np.array([self.step_reward], dtype=np.float32)),
                                      axis=None)
         return self._process_data(observation)
 

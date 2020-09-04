@@ -207,7 +207,7 @@ class DataPipeline(object):
         data = self.import_csv(filename=data_used_in_environment)
 
         # Raw midpoint prices for back-testing environment
-        midpoint_prices = data['midpoint']
+        midpoint_prices = data.loc[:, ['midpoint']]
 
         # Copy of raw LOB snapshots for normalization
         normalized_data = self._midpoint_diff(data.copy(deep=True))
@@ -265,12 +265,26 @@ class DataPipeline(object):
         :param as_pandas: if TRUE, return data as DataFrame, otherwise np.array
         :return: (pd.DataFrame or np.array) scaled environment data
         """
+
+        midpoint_prices_joined = pd.read_parquet(os.path.join(DATA_PATH, 'midpoint_prices_joined.parquet'), engine='fastparquet')
+        normalized_data_joined = pd.read_parquet(os.path.join(DATA_PATH, 'normalized_data_joined.parquet'), engine='fastparquet')
+        data_joined = pd.read_parquet(os.path.join(DATA_PATH, 'data_joined.parquet'), engine='fastparquet')
+
+        LOGGER.info('Loaded data from parquet...')
+
+        if as_pandas is False:
+            midpoint_prices_joined = midpoint_prices_joined.to_numpy(dtype=np.float32)
+            data_joined = data_joined.to_numpy(dtype=np.float32)
+            normalized_data_joined = normalized_data_joined.to_numpy(dtype=np.float32)
+
+        return midpoint_prices_joined, data_joined, normalized_data_joined
+
         data_by_type = {
             'midpoint_prices': {},
             'data': {},
             'normalized_data': {},
         }
-        npartitions = cpu_count()
+        npartitions = int(cpu_count() / len(exchanges))
         for ex in exchanges:
             fitting_file = fitting_file_template.format(ex)
             testing_file = testing_file_template.format(ex)
@@ -279,17 +293,21 @@ class DataPipeline(object):
                                                                                 testing_file=testing_file,
                                                                                 include_imbalances=include_imbalances,
                                                                                 as_pandas=True)
-            
+            assert isinstance(midpoint_prices.index, pd.DatetimeIndex)
+            assert isinstance(data.index, pd.DatetimeIndex)
+            assert isinstance(normalized_data.index, pd.DatetimeIndex)
+
             data_by_type['midpoint_prices'][ex] = dd.from_pandas(midpoint_prices.add_suffix(f'_{ex}'), npartitions=npartitions)
             data_by_type['data'][ex] = dd.from_pandas(data.add_suffix(f'_{ex}'), npartitions=npartitions)
             data_by_type['normalized_data'][ex] = dd.from_pandas(normalized_data.add_suffix(f'_{ex}'), npartitions=npartitions)
+            self.reset()
 
         midpoint_prices_joined = data_by_type['midpoint_prices'][exchanges[0]]
         data_joined = data_by_type['data'][exchanges[0]]
         normalized_data_joined = data_by_type['normalized_data'][exchanges[0]]
 
         for ex in exchanges[1:]:
-            normalized_data_joined = midpoint_prices_joined.join(
+            midpoint_prices_joined = midpoint_prices_joined.join(
                 data_by_type['midpoint_prices'][ex],
                 how='inner'
             )
@@ -305,6 +323,12 @@ class DataPipeline(object):
         midpoint_prices_joined = midpoint_prices_joined.compute(scheduler='processes')
         normalized_data_joined = normalized_data_joined.compute(scheduler='processes')
         data_joined = data_joined.compute(scheduler='processes')
+
+        LOGGER.info('Saving data files...')
+        midpoint_prices_joined.to_parquet(os.path.join(DATA_PATH, 'midpoint_prices_joined.parquet'), engine='fastparquet')
+        normalized_data_joined.to_parquet(os.path.join(DATA_PATH, 'normalized_data_joined.parquet'), engine='fastparquet')
+        data_joined.to_parquet(os.path.join(DATA_PATH, 'data_joined.parquet'), engine='fastparquet')
+        LOGGER.info('Done saving data files...')
 
         if as_pandas is False:
             midpoint_prices_joined = midpoint_prices_joined.to_numpy(dtype=np.float32)

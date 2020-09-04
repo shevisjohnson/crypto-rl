@@ -1,37 +1,24 @@
 import tensorflow as tf
 import numpy as np
 from keras.models import Sequential
-from keras.layers import Dense, Flatten, Conv2D, Layer
+from keras.layers import Dense, Flatten, Conv2D, Lambda
 from keras.optimizers import Adam
 from rl.agents.dqn import DQNAgent
 from rl.memory import SequentialMemory
 from rl.callbacks import FileLogger, ModelIntervalCheckpoint
 #from keras.callbacks import TensorBoard
-from configurations import LOGGER, CURRENCIES
+from configurations import LOGGER, CURRENCIES, GRIDMAX_LEVEL
 from itertools import filterfalse, permutations
 import os
 import gym
 import gym_trading
 from datetime import datetime
-
-def gridmax(input_shape, level):
-    n_partitions = 2 ** level
-    base = [0.0]*(input_shape - 1)
-    for i in range(1, n_partitions+1):
-        if (not (i & (i-1) == 0)) and i != 1:
-            continue
-        base += [1.0/i]*i
-        sub_i = 1.0/i
-        while sub_i < 1.0:
-            base.append(1.0-sub_i)
-            sub_i += 1.0/i
-    possible_dists = np.array(list(filterfalse(lambda x: sum(x) != 1.0, permutations(base, input_shape))))
-    possible_dists = np.unique(possible_dists.round(decimals=5), axis=0)
-    return possible_dists
+from gym_trading.utils.gridmax import gridmax
 
 class GridMax(Layer):
+    name = 'GridMax'
     def __init__(self, input_shape, level=0):
-        super(Layer, self).__init__()
+        super(GridMax, self).__init__()
         self.level = level
         self.n_partitions = n_partitions = 2 ** level
         possible_dists = gridmax(input_shape, level)
@@ -40,7 +27,8 @@ class GridMax(Layer):
     def call(self, inputs):
         def normap(x):
             return tf.norm(inputs-x, ord='euclidean')
-        return self.dist_map[tf.math.argmin(input=tf.map_fn(normap, elems=self.dist_map))]
+        result = tf.eye(int(self.dist_map.shape[0]), dtype=tf.dtypes.float32, name='action')
+        return result[tf.math.argmin(input=tf.map_fn(normap, elems=self.dist_map))], (1, int(self.dist_map.shape[0]))
 
 
 class Agent(object):
@@ -138,7 +126,7 @@ class Agent(object):
         conv = Conv2D
         model.add(conv(input_shape=features_shape,
                        filters=5, kernel_size=[20, 1], padding='same', activation='relu',
-                       strides=[8, 1], data_format='channels_first'))
+                       strides=[10, 1], data_format='channels_first'))
         model.add(conv(filters=5, kernel_size=[10, 1], padding='same', activation='relu',
                        strides=[5, 1], data_format='channels_first'))
         model.add(conv(filters=5, kernel_size=[5, 1], padding='same', activation='relu',
@@ -147,8 +135,8 @@ class Agent(object):
                        strides=[2, 1], data_format='channels_first'))
         model.add(Flatten())
         model.add(Dense(256, activation='relu'))
-        model.add(Dense(self.env.action_space.shape[0], activation='softmax'))
-        model.add(GridMax(self.env.action_space.shape[0]), 0)
+        model.add(Dense(self.env.action_space.n, activation='softmax'))
+        #model.add(GridMax(len(CURRENCIES), GRIDMAX_LEVEL))
         LOGGER.info(model.summary())
         return model
 
@@ -210,7 +198,7 @@ class Agent(object):
                            callbacks=callbacks,
                            nb_steps=self.number_of_training_steps,
                            log_interval=10000,
-                           verbose=0,
+                           verbose=1,
                            visualize=self.visualize)
             LOGGER.info("training over.")
             LOGGER.info('Saving AGENT weights...')
